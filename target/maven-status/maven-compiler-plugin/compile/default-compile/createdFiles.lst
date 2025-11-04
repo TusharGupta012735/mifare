@@ -10,6 +10,7 @@ nfc\SmartMifareWriter$WriteResult.class
 nfc\SmartMifareReader$ReadResult.class
 db\AccessDb.class
 nfc\SmartMifareReader$AuthResult.class
+ui\BatchFilterDialog$ThrowingSupplier.class
 nfc\SmartMifareReader.class
 util\DbPath.class
 nfc\SmartMifareWriter.class

@@ -1,25 +1,18 @@
 package ui;
 
 import db.AccessDb;
+import javafx.beans.binding.Bindings;
 import javafx.geometry.Insets;
 import javafx.geometry.Pos;
+import javafx.scene.Node;
 import javafx.scene.control.*;
+import javafx.scene.input.KeyCode;
 import javafx.scene.layout.*;
 import javafx.scene.text.Font;
-import javafx.scene.text.FontWeight;
 import javafx.stage.Window;
 
 import java.util.*;
-import java.util.stream.Collectors;
 
-/**
- * Styled dialog that asks for State and Excel Category, then fetches matching
- * rows.
- * OK is enabled when:
- * - state is non-empty OR
- * - category is non-empty OR
- * - "Only status = 'f'" is checked (so you can fetch all 'f' without filters)
- */
 public final class BatchFilterDialog {
 
     private BatchFilterDialog() {
@@ -37,62 +30,134 @@ public final class BatchFilterDialog {
         }
     }
 
+    private static final String ALL_MARKER = "— All —";
+
     /** Show the dialog and fetch rows. Returns null if cancelled or none found. */
     public static List<Map<String, String>> showAndFetch(Window owner) {
+        // --- Load distinct lists ---
+        List<String> states = safe(() -> AccessDb.fetchDistinctStates(), List.of());
+        List<String> cats = safe(() -> AccessDb.fetchDistinctExcelCategories(), List.of());
+
+        // Add "All" at top
+        states = withAll(states);
+        cats = withAll(cats);
+
         Dialog<Result> dlg = new Dialog<>();
         dlg.setTitle("Batch Filter");
         if (owner != null)
             dlg.initOwner(owner);
         dlg.getDialogPane().getButtonTypes().addAll(ButtonType.OK, ButtonType.CANCEL);
 
-        String baseStyleCore = "-fx-background-color: white; -fx-border-color: #bdbdbd; -fx-border-radius: 6; "
-                + "-fx-background-radius: 6; -fx-padding: 8 10; -fx-text-fill: #212121;";
-        String labelStyle = "-fx-font-weight:600; -fx-text-fill:#212121;";
-        String titleStyle = "-fx-text-fill: #1565c0;";
+        // --- Root container with padding ---
+        BorderPane root = new BorderPane();
+        root.setPadding(new Insets(18));
+
+        // --- Top banner: “Ready for records — …” (starts neutral, gets updated after
+        // fetch) ---
+        Label banner = new Label("Ready for records — set filters and press OK");
+        banner.setStyle("""
+                    -fx-font-weight: 800;
+                    -fx-text-fill: #0D47A1;
+                """);
+        // Responsive font size: scales with dialog width but capped
+        banner.fontProperty().bind(Bindings.createObjectBinding(
+                () -> Font.font(Math.max(16, Math.min(26, dlg.getDialogPane().getWidth() / 20))),
+                dlg.getDialogPane().widthProperty()));
+        StackPane bannerWrap = new StackPane(banner);
+        StackPane.setAlignment(banner, Pos.CENTER);
+        bannerWrap.setPadding(new Insets(6, 0, 16, 0));
+        root.setTop(bannerWrap);
+
+        // --- “Card” with inputs ---
+        VBox card = new VBox(14);
+        card.setPadding(new Insets(16));
+        card.setStyle("""
+                    -fx-background-color: white;
+                    -fx-background-radius: 12;
+                    -fx-border-radius: 12;
+                    -fx-border-color: #E0E0E0;
+                    -fx-effect: dropshadow(gaussian, rgba(0,0,0,0.08), 12, 0, 0, 3);
+                """);
 
         Label title = new Label("📂 Prepare Batch");
-        title.setFont(Font.font("System", FontWeight.BOLD, 20));
-        title.setStyle(titleStyle);
+        title.setStyle("-fx-text-fill: #1565C0; -fx-font-weight: 800;");
+        title.fontProperty().bind(Bindings.createObjectBinding(
+                () -> Font.font(Math.max(16, Math.min(22, dlg.getDialogPane().getWidth() / 28))),
+                dlg.getDialogPane().widthProperty()));
 
-        TextField stateField = new TextField();
-        stateField.setPromptText("BSGState (e.g., Assam)");
-        stateField.setStyle(baseStyleCore);
+        // Row: State
+        ComboBox<String> stateBox = new ComboBox<>();
+        stateBox.getItems().setAll(states);
+        stateBox.getSelectionModel().selectFirst();
+        stateBox.setEditable(true);
+        stylizeCombo(stateBox);
 
-        TextField categoryField = new TextField();
-        categoryField.setPromptText("Excel Category (optional)");
-        categoryField.setStyle(baseStyleCore);
+        Button stateClear = new Button("Clear");
+        styleGhostBtn(stateClear);
+        stateClear.setOnAction(e -> {
+            stateBox.getEditor().clear();
+            stateBox.getSelectionModel().selectFirst();
+        });
 
+        HBox stateRow = labeledRow("State", stateBox, stateClear);
+
+        // Row: Excel Category
+        ComboBox<String> categoryBox = new ComboBox<>();
+        categoryBox.getItems().setAll(cats);
+        categoryBox.getSelectionModel().selectFirst();
+        categoryBox.setEditable(true);
+        stylizeCombo(categoryBox);
+
+        Button categoryClear = new Button("Clear");
+        styleGhostBtn(categoryClear);
+        categoryClear.setOnAction(e -> {
+            categoryBox.getEditor().clear();
+            categoryBox.getSelectionModel().selectFirst();
+        });
+
+        HBox catRow = labeledRow("Excel Category", categoryBox, categoryClear);
+
+        // Row: Only F
         CheckBox onlyF = new CheckBox("Only status = 'f' (unprocessed)");
         onlyF.setSelected(true);
+        onlyF.setStyle("-fx-font-size: 13px; -fx-text-fill: #37474F;");
 
-        GridPane grid = new GridPane();
-        grid.setHgap(12);
-        grid.setVgap(12);
-        grid.add(rowLabel("State:", labelStyle), 0, 0);
-        grid.add(stateField, 1, 0);
-        grid.add(rowLabel("Excel category:", labelStyle), 0, 1);
-        grid.add(categoryField, 1, 1);
-        grid.add(onlyF, 1, 2);
+        card.getChildren().addAll(title, stateRow, catRow, onlyF);
 
-        VBox box = new VBox(12, title, grid);
-        box.setAlignment(Pos.CENTER_LEFT);
-        box.setPadding(new Insets(12));
-        dlg.getDialogPane().setContent(box);
+        // Center the card, keep layout comfy
+        root.setCenter(card);
 
-        // OK button enabled if (state not empty) OR (category not empty) OR (onlyF
-        // selected)
+        // Footer hint
+        Label hint = new Label("Tip: Start typing to filter the drop-down lists.");
+        hint.setStyle("-fx-text-fill: #607D8B; -fx-font-size: 12px;");
+        BorderPane.setMargin(hint, new Insets(10, 0, 0, 4));
+        root.setBottom(hint);
+
+        dlg.getDialogPane().setContent(root);
+
+        // Enable/disable OK like before
         Button okBtn = (Button) dlg.getDialogPane().lookupButton(ButtonType.OK);
         okBtn.disableProperty().bind(
-                stateField.textProperty().isEmpty()
-                        .and(categoryField.textProperty().isEmpty())
+                stateBox.valueProperty().isEqualTo(ALL_MARKER)
+                        .or(stateBox.valueProperty().isNull())
+                        .and(categoryBox.valueProperty().isEqualTo(ALL_MARKER)
+                                .or(categoryBox.valueProperty().isNull()))
                         .and(onlyF.selectedProperty().not()));
 
+        // Enter -> OK (if enabled)
+        dlg.getDialogPane().setOnKeyPressed(ke -> {
+            if (ke.getCode() == KeyCode.ENTER && !okBtn.isDisabled()) {
+                okBtn.fire();
+                ke.consume();
+            }
+        });
+
+        // Convert result
         dlg.setResultConverter(bt -> {
             if (bt == ButtonType.OK) {
-                return new Result(
-                        opt(stateField.getText()),
-                        opt(categoryField.getText()),
-                        onlyF.isSelected());
+                String state = normalizeBoxValue(stateBox.getEditor().getText());
+                String cat = normalizeBoxValue(categoryBox.getEditor().getText());
+                return new Result(state, cat, onlyF.isSelected());
             }
             return null;
         });
@@ -103,35 +168,120 @@ public final class BatchFilterDialog {
 
         Result r = res.get();
         try {
-            // AccessDb should implement LIKE & case-insensitivity internally
             List<Map<String, String>> rows = AccessDb.fetchParticipantsByStateAndCategory(
                     r.state, r.category, r.onlyStatusF);
 
             if (rows == null || rows.isEmpty()) {
-                Alert a = new Alert(Alert.AlertType.INFORMATION, "No matching records.", ButtonType.OK);
-                a.setHeaderText(null);
-                a.showAndWait();
+                banner.setText("Ready for records — 0 found");
+                info("No matching records.", Alert.AlertType.INFORMATION);
                 return null;
             }
+
+            // Success UX: update banner & show confirmation
+            banner.setText("Ready for records — " + rows.size() + " found");
+            info(rows.size() + " record(s) ready.", Alert.AlertType.INFORMATION);
+
             return rows;
         } catch (Exception ex) {
-            Alert a = new Alert(Alert.AlertType.ERROR, "DB fetch failed: " + ex.getMessage(), ButtonType.OK);
-            a.setHeaderText(null);
-            a.showAndWait();
+            error("DB fetch failed: " + ex.getMessage());
             return null;
         }
     }
 
-    private static String opt(String s) {
-        if (s == null)
-            return null;
-        String t = s.trim();
-        return t.isEmpty() ? null : t;
+    // ---------------- helpers ----------------
+
+    private static void stylizeCombo(ComboBox<String> cb) {
+        cb.setMaxWidth(Double.MAX_VALUE);
+        cb.setVisibleRowCount(12);
+        cb.setPromptText("Select or type…");
+        cb.setStyle("""
+                    -fx-background-color: white;
+                    -fx-border-color: #BDBDBD;
+                    -fx-border-radius: 8;
+                    -fx-background-radius: 8;
+                    -fx-padding: 6 10;
+                    -fx-font-size: 13px;
+                    -fx-text-fill: #212121;
+                """);
+        HBox.setHgrow(cb, Priority.ALWAYS);
     }
 
-    private static Label rowLabel(String text, String style) {
-        Label l = new Label(text);
-        l.setStyle(style);
-        return l;
+    private static void styleGhostBtn(Button b) {
+        b.setStyle("""
+                    -fx-background-color: transparent;
+                    -fx-text-fill: #1565C0;
+                    -fx-font-size: 12px;
+                    -fx-underline: true;
+                    -fx-padding: 2 6;
+                """);
+        b.setOnMouseEntered(e -> b.setStyle("""
+                    -fx-background-color: rgba(21,101,192,0.06);
+                    -fx-text-fill: #0D47A1;
+                    -fx-font-size: 12px;
+                    -fx-underline: true;
+                    -fx-padding: 2 6;
+                """));
+        b.setOnMouseExited(e -> b.setStyle("""
+                    -fx-background-color: transparent;
+                    -fx-text-fill: #1565C0;
+                    -fx-font-size: 12px;
+                    -fx-underline: true;
+                    -fx-padding: 2 6;
+                """));
+    }
+
+    /** Label + control + optional trailing button, aligned nicely */
+    private static HBox labeledRow(String label, Node field, Button trailing) {
+        Label l = new Label(label + ":");
+        l.setStyle("-fx-font-weight: 700; -fx-text-fill: #263238; -fx-font-size: 13px;");
+
+        HBox row = new HBox(10, l, field);
+        if (trailing != null)
+            row.getChildren().add(trailing);
+        row.setAlignment(Pos.CENTER_LEFT);
+        HBox.setHgrow(field, Priority.ALWAYS);
+
+        return row;
+    }
+
+    private static void info(String msg, Alert.AlertType type) {
+        Alert a = new Alert(type, msg, ButtonType.OK);
+        a.setHeaderText(null);
+        a.showAndWait();
+    }
+
+    private static void error(String msg) {
+        Alert a = new Alert(Alert.AlertType.ERROR, msg, ButtonType.OK);
+        a.setHeaderText(null);
+        a.showAndWait();
+    }
+
+    private static <T> T safe(ThrowingSupplier<T> s, T fallback) {
+        try {
+            return s.get();
+        } catch (Exception e) {
+            return fallback;
+        }
+    }
+
+    @FunctionalInterface
+    private interface ThrowingSupplier<T> {
+        T get() throws Exception;
+    }
+
+    private static List<String> withAll(List<String> list) {
+        List<String> out = new ArrayList<>(list.size() + 1);
+        out.add(ALL_MARKER);
+        out.addAll(list);
+        return out;
+    }
+
+    private static String normalizeBoxValue(String v) {
+        if (v == null)
+            return null;
+        v = v.trim();
+        if (v.isEmpty() || v.equals(ALL_MARKER))
+            return null;
+        return v;
     }
 }

@@ -770,4 +770,191 @@ public class AccessDb {
             System.out.println("- Try: mvn javafx:run -Pwin (or -Pmac / -Plinux)");
         }
     }
+
+    /** Distinct BSGState values from ParticipantsRecord, alphabetically. */
+    public static List<String> fetchDistinctStates() throws SQLException {
+        List<String> out = new ArrayList<>();
+        try (Connection c = getConnection()) {
+            // Some rows may have nulls/empties; ignore them. Use UCASE to fold case
+            // variants.
+            String sql = "SELECT DISTINCT UCASE([BSGState]) AS v " +
+                    "FROM [ParticipantsRecord] " +
+                    "WHERE [BSGState] IS NOT NULL AND TRIM([BSGState]) <> '' " +
+                    "ORDER BY UCASE([BSGState])";
+            try (PreparedStatement ps = c.prepareStatement(sql);
+                    ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) {
+                    String v = rs.getString(1);
+                    if (v != null && !v.isBlank())
+                        out.add(v.trim());
+                }
+            }
+        }
+        return out;
+    }
+
+    /**
+     * Distinct excel_category (handles excel_category or ExcelCategory),
+     * alphabetically.
+     */
+    public static List<String> fetchDistinctExcelCategories() throws SQLException {
+        List<String> out = new ArrayList<>();
+        try (Connection c = getConnection()) {
+            // detect column name
+            DatabaseMetaData md = c.getMetaData();
+            boolean hasLower = false, hasCamel = false;
+            try (ResultSet rs = md.getColumns(null, null, "ParticipantsRecord", "%")) {
+                while (rs.next()) {
+                    String cn = rs.getString("COLUMN_NAME");
+                    if (cn == null)
+                        continue;
+                    String up = cn.toUpperCase(Locale.ROOT);
+                    if (up.equals("EXCEL_CATEGORY"))
+                        hasLower = true;
+                    if (up.equals("EXCELCATEGORY"))
+                        hasCamel = true;
+                }
+            }
+            String col = hasLower ? "[excel_category]" : (hasCamel ? "[ExcelCategory]" : null);
+            if (col == null)
+                return out; // no such column in this DB
+
+            String sql = "SELECT DISTINCT UCASE(" + col + ") AS v " +
+                    "FROM [ParticipantsRecord] " +
+                    "WHERE " + col + " IS NOT NULL AND TRIM(" + col + ") <> '' " +
+                    "ORDER BY UCASE(" + col + ")";
+            try (PreparedStatement ps = c.prepareStatement(sql);
+                    ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) {
+                    String v = rs.getString(1);
+                    if (v != null && !v.isBlank())
+                        out.add(v.trim());
+                }
+            }
+        }
+        return out;
+    }
+    // === Add into db.AccessDb ===
+
+/** Insert many rows into ParticipantsRecord, tagging each with excel_category and status='F'. */
+public static int bulkImportParticipantsRecord(String excelCategory, List<Map<String,String>> rows) throws SQLException {
+    if (rows == null || rows.isEmpty()) return 0;
+
+    try (Connection c = getConnection()) {
+        c.setAutoCommit(false);
+        try {
+            // discover columns & types
+            DatabaseMetaData md = c.getMetaData();
+            Map<String,Integer> type = new HashMap<>();
+            Set<String> present = new HashSet<>();
+            try (ResultSet rs = md.getColumns(null, null, "ParticipantsRecord", "%")) {
+                while (rs.next()) {
+                    String col = rs.getString("COLUMN_NAME");
+                    if (col != null) {
+                        present.add(col.toUpperCase(Locale.ROOT));
+                        type.put(col.toUpperCase(Locale.ROOT), rs.getInt("DATA_TYPE"));
+                    }
+                }
+            }
+
+            // columns we try to write (add excel_category + status if missing we’ll skip)
+            List<String> desired = List.of(
+                "FullName","BSGUID","ParticipationType","BSGDistrict",
+                "Email","PhoneNumber","BSGState","MemberType",
+                "UnitName","RankOrSection","DateOfBirth","Age",
+                "excel_category","status"
+            );
+
+            List<String> cols = new ArrayList<>();
+            for (String d : desired) if (present.contains(d.toUpperCase(Locale.ROOT))) cols.add(d);
+
+            if (cols.isEmpty()) throw new SQLException("ParticipantsRecord has no expected columns to insert.");
+
+            String colList = cols.stream().map(n -> "["+n+"]").collect(java.util.stream.Collectors.joining(","));
+            String placeholders = String.join(",", java.util.Collections.nCopies(cols.size(), "?"));
+            String sql = "INSERT INTO [ParticipantsRecord] ("+colList+") VALUES ("+placeholders+")";
+
+            // header mapper: map common Excel headers to DB columns
+            java.util.function.Function<String,String> mapHeader = h -> {
+                if (h == null) return null;
+                String k = h.trim().toLowerCase(Locale.ROOT).replaceAll("[^a-z0-9]+",""); // normalize
+                return switch (k) {
+                    case "fullname","name" -> "FullName";
+                    case "bsguid","guid" -> "BSGUID";
+                    case "participationtype","type" -> "ParticipationType";
+                    case "bsgdistrict","district" -> "BSGDistrict";
+                    case "email","mail" -> "Email";
+                    case "phonenumber","phone","mobile","contact" -> "PhoneNumber";
+                    case "bsgstate","state" -> "BSGState";
+                    case "membertype","membertyp" -> "MemberType";
+                    case "unitname","unitnam" -> "UnitName";
+                    case "rankorsection","rank_or_section","rank" -> "RankOrSection";
+                    case "dateofbirth","dob","dataofbirth" -> "DateOfBirth";
+                    case "age" -> "Age";
+                    default -> null;
+                };
+            };
+
+            int total = 0;
+            try (PreparedStatement ps = c.prepareStatement(sql)) {
+                for (Map<String,String> row : rows) {
+                    int idx = 1;
+                    for (String col : cols) {
+                        int jt = type.getOrDefault(col.toUpperCase(Locale.ROOT), Types.VARCHAR);
+                        Object v;
+
+                        // excel_category / status are controlled
+                        if ("excel_category".equalsIgnoreCase(col)) {
+                            v = excelCategory;
+                        } else if ("status".equalsIgnoreCase(col)) {
+                            v = "F";
+                        } else {
+                            // pick value from row; accept both DB name and header aliases in the map
+                            v = firstNonBlank(row,
+                                    col,                         // exact DB col
+                                    col.toLowerCase(Locale.ROOT),
+                                    // attempt alias lookups (row from UI uses original excel headers)
+                                    Optional.ofNullable(mapHeader.apply(col)).orElse(col)
+                            );
+                            if ("PhoneNumber".equalsIgnoreCase(col)) {
+                                v = normalizePhoneE164IN((String) v);
+                            } else if ("DateOfBirth".equalsIgnoreCase(col)) {
+                                String iso = normalizeDobOrNull((String) v);
+                                if (iso != null && (jt == Types.DATE || jt == Types.TIMESTAMP || jt == Types.TIMESTAMP_WITH_TIMEZONE)) {
+                                    try { v = java.sql.Date.valueOf(iso); } catch (Exception ex) { v = null; }
+                                } else {
+                                    v = iso; // store as text if column is text
+                                }
+                            }
+                        }
+
+                        // bind
+                        if (v == null || (v instanceof String s && s.isBlank())) {
+                            if (jt == Types.TIMESTAMP_WITH_TIMEZONE) jt = Types.TIMESTAMP;
+                            ps.setNull(idx++, jt);
+                        } else if (v instanceof java.sql.Date d) {
+                            ps.setDate(idx++, d);
+                        } else if (v instanceof java.sql.Timestamp ts) {
+                            ps.setTimestamp(idx++, ts);
+                        } else {
+                            // keep strings for safety for non-date columns
+                            ps.setString(idx++, v.toString().trim());
+                        }
+                    }
+                    ps.addBatch();
+                }
+                int[] counts = ps.executeBatch();
+                for (int n : counts) total += (n > 0 ? n : 0);
+                c.commit();
+            } catch (SQLException ex) {
+                try { c.rollback(); } catch (Exception ignore) {}
+                throw ex;
+            }
+            return total;
+        } finally {
+            try { c.setAutoCommit(true); } catch (Exception ignore) {}
+        }
+    }
+}
+
 }

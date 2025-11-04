@@ -20,6 +20,96 @@ import javafx.scene.Node;
 
 public class Dashboard extends BorderPane {
 
+    // Make inputs/headings larger & cleaner without touching EntryForm code
+    private void prettifyForm(Parent root) {
+        // TextFields
+        for (Node n : root.lookupAll(".text-field")) {
+            n.setStyle("""
+                        -fx-font-size: 15px;
+                        -fx-padding: 10 12;
+                        -fx-background-color: white;
+                        -fx-background-radius: 8;
+                        -fx-border-color: #BDBDBD;
+                        -fx-border-radius: 8;
+                    """);
+        }
+        // ComboBoxes
+        for (Node n : root.lookupAll(".combo-box")) {
+            n.setStyle("""
+                        -fx-font-size: 15px;
+                        -fx-padding: 8 10;
+                        -fx-background-color: white;
+                        -fx-background-radius: 8;
+                        -fx-border-color: #BDBDBD;
+                        -fx-border-radius: 8;
+                    """);
+        }
+        // DatePickers
+        for (Node n : root.lookupAll(".date-picker")) {
+            n.setStyle("""
+                        -fx-font-size: 15px;
+                        -fx-padding: 8 10;
+                        -fx-background-color: white;
+                        -fx-background-radius: 8;
+                        -fx-border-color: #BDBDBD;
+                        -fx-border-radius: 8;
+                    """);
+        }
+        // TextAreas
+        for (Node n : root.lookupAll(".text-area")) {
+            n.setStyle("""
+                        -fx-font-size: 15px;
+                        -fx-padding: 10 12;
+                        -fx-background-color: white;
+                        -fx-background-radius: 8;
+                        -fx-border-color: #BDBDBD;
+                        -fx-border-radius: 8;
+                    """);
+        }
+        // Labels (only those inside form – this call is on the batch parent, not
+        // navbar)
+        for (Node n : root.lookupAll(".label")) {
+            // bump headings more if they already look like section titles
+            n.setStyle("-fx-font-size: 14px; -fx-text-fill: #263238;");
+        }
+        // Buttons
+        for (Node n : root.lookupAll(".button")) {
+            n.setStyle("""
+                        -fx-background-color: #1976D2;
+                        -fx-text-fill: white;
+                        -fx-font-weight: bold;
+                        -fx-font-size: 14px;
+                        -fx-background-radius: 8;
+                        -fx-padding: 8 14;
+                        -fx-cursor: hand;
+                    """);
+            n.setOnMouseEntered(e -> n.setStyle("""
+                        -fx-background-color: #2196F3;
+                        -fx-text-fill: white;
+                        -fx-font-weight: bold;
+                        -fx-font-size: 14px;
+                        -fx-background-radius: 8;
+                        -fx-padding: 8 14;
+                        -fx-cursor: hand;
+                    """));
+            n.setOnMouseExited(e -> n.setStyle("""
+                        -fx-background-color: #1976D2;
+                        -fx-text-fill: white;
+                        -fx-font-weight: bold;
+                        -fx-font-size: 14px;
+                        -fx-background-radius: 8;
+                        -fx-padding: 8 14;
+                        -fx-cursor: hand;
+                    """));
+        }
+        // Optional: card-like background if the batch root is a Pane
+        if (root instanceof Region r) {
+            r.setStyle("""
+                        -fx-background-color: transparent;
+                    """);
+        }
+    }
+
     private final StackPane contentArea = new StackPane();
 
     public Dashboard() {
@@ -248,6 +338,21 @@ public class Dashboard extends BorderPane {
             if (rows == null || rows.isEmpty())
                 return;
 
+            // Top banner (centered)
+            int total = rows.size();
+            Label banner = new Label("Ready for records — " + total + " selected");
+            banner.setStyle("""
+                        -fx-font-size: 22px;
+                        -fx-font-weight: 900;
+                        -fx-text-fill: #0D47A1;
+                    """);
+            HBox bannerWrap = new HBox(banner);
+            bannerWrap.setAlignment(Pos.CENTER);
+            bannerWrap.setPadding(new Insets(8, 0, 12, 0));
+
+            java.util.concurrent.atomic.AtomicInteger processed = new java.util.concurrent.atomic.AtomicInteger(0);
+
+            // Create your SAME editable form UI
             Parent batch = EntryForm.createBatch((formData, done) -> {
                 new Thread(() -> {
                     try {
@@ -272,6 +377,15 @@ public class Dashboard extends BorderPane {
 
                         try {
                             AccessDb.insertAttendee(formData, cardUid);
+                            int doneCount = processed.incrementAndGet();
+                            Platform.runLater(() -> {
+                                banner.setText("Processed " + doneCount + " / " + total);
+                                Alert ok = new Alert(Alert.AlertType.INFORMATION,
+                                        "Saved: " + formData.getOrDefault("FullName", "(no name)"),
+                                        ButtonType.OK);
+                                ok.setHeaderText(null);
+                                ok.showAndWait();
+                            });
                         } catch (Exception dbEx) {
                             Platform.runLater(() -> {
                                 Alert alert = new Alert(Alert.AlertType.ERROR,
@@ -287,7 +401,12 @@ public class Dashboard extends BorderPane {
                 }, "batch-filter-thread").start();
             }, rows);
 
-            setContent(batch);
+            // 🔹 Make the existing form look cleaner/bigger WITHOUT changing its structure
+            prettifyForm(batch);
+
+            VBox page = new VBox(0, bannerWrap, batch);
+            page.setPadding(new Insets(12, 20, 12, 20));
+            setContent(page);
         });
 
         reportBtn.setOnAction(e -> setContent("📊 Report Page"));
