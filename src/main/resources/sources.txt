@@ -1,0 +1,10 @@
+C:\Users\kamal\Desktop\attendance-fair-system\src\Main.java
+C:\Users\kamal\Desktop\attendance-fair-system\src\db\AccessDb.java
+C:\Users\kamal\Desktop\attendance-fair-system\src\nfc\SmartMifareEraser.java
+C:\Users\kamal\Desktop\attendance-fair-system\src\nfc\SmartMifareReader.java
+C:\Users\kamal\Desktop\attendance-fair-system\src\nfc\SmartMifareWriter.java
+C:\Users\kamal\Desktop\attendance-fair-system\src\ui\AttendancePage.java
+C:\Users\kamal\Desktop\attendance-fair-system\src\ui\AttendanceSection.java
+C:\Users\kamal\Desktop\attendance-fair-system\src\ui\Dashboard.java
+C:\Users\kamal\Desktop\attendance-fair-system\src\ui\EntryForm.java
+C:\Users\kamal\Desktop\attendance-fair-system\src\ui\MainUI.java

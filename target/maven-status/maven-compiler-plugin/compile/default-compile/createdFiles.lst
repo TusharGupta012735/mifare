@@ -1,0 +1,17 @@
+nfc\SmartMifareEraser.class
+nfc\SmartMifareWriter$BlockAuth.class
+ui\EntryForm.class
+util\Main.class
+util\CsvReader.class
+ui\BatchFilterDialog$Result.class
+ui\BatchFilterDialog.class
+ui\AttendancePage.class
+nfc\SmartMifareWriter$WriteResult.class
+nfc\SmartMifareReader$ReadResult.class
+db\AccessDb.class
+nfc\SmartMifareReader$AuthResult.class
+nfc\SmartMifareReader.class
+util\DbPath.class
+nfc\SmartMifareWriter.class
+ui\MainUI.class
+ui\Dashboard.class

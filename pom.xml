@@ -1,0 +1,153 @@
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+
+  <groupId>com.yourorg</groupId>
+  <artifactId>attendance-app</artifactId>
+  <version>1.0.0</version>
+  <name>Attendance App</name>
+
+  <properties>
+    <maven.compiler.release>21</maven.compiler.release>
+    <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+
+    <!-- JavaFX -->
+    <javafx.version>21.0.5</javafx.version>
+    <javafx.platform>win</javafx.platform> <!-- win | mac | linux -->
+
+    <!-- Your JavaFX main -->
+    <main.class>util.Main</main.class>
+
+    <!-- DB -->
+    <ucanaccess.version>5.0.1</ucanaccess.version>
+  </properties>
+
+  <dependencies>
+    <!-- JavaFX: add/remove modules as needed -->
+    <dependency>
+      <groupId>org.openjfx</groupId>
+      <artifactId>javafx-controls</artifactId>
+      <version>${javafx.version}</version>
+      <classifier>${javafx.platform}</classifier>
+    </dependency>
+    <dependency>
+      <groupId>org.openjfx</groupId>
+      <artifactId>javafx-fxml</artifactId>
+      <version>${javafx.version}</version>
+      <classifier>${javafx.platform}</classifier>
+    </dependency>
+
+    <!-- UCanAccess (brings jackcess, hsqldb, commons-*) -->
+    <dependency>
+      <groupId>net.sf.ucanaccess</groupId>
+      <artifactId>ucanaccess</artifactId>
+      <version>${ucanaccess.version}</version>
+    </dependency>
+  </dependencies>
+
+  <build>
+    <plugins>
+      <!-- Java 21 -->
+      <plugin>
+        <artifactId>maven-compiler-plugin</artifactId>
+        <version>3.11.0</version>
+        <configuration>
+          <release>${maven.compiler.release}</release>
+        </configuration>
+      </plugin>
+
+      <!-- Dev run: mvn javafx:run -Pwin -->
+      <plugin>
+        <groupId>org.openjfx</groupId>
+        <artifactId>javafx-maven-plugin</artifactId>
+        <version>0.0.8</version>
+        <configuration>
+          <mainClass>${main.class}</mainClass>
+        </configuration>
+      </plugin>
+
+      <!-- FAT/UBER JAR (single runnable jar) -->
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-assembly-plugin</artifactId>
+        <version>3.6.0</version>
+        <configuration>
+          <descriptorRefs>
+            <descriptorRef>jar-with-dependencies</descriptorRef>
+          </descriptorRefs>
+          <finalName>${project.artifactId}</finalName>
+          <archive>
+            <manifest>
+              <mainClass>${main.class}</mainClass>
+            </manifest>
+          </archive>
+        </configuration>
+        <executions>
+          <execution>
+            <id>make-assembly</id>
+            <phase>package</phase>
+            <goals>
+              <goal>single</goal>
+            </goals>
+          </execution>
+        </executions>
+      </plugin>
+    </plugins>
+  </build>
+
+  <!-- switch platform easily: -Pwin / -Pmac / -Plinux -->
+  <profiles>
+    <profile>
+      <id>win</id>
+      <properties>
+        <javafx.platform>win</javafx.platform>
+      </properties>
+    </profile>
+    <profile>
+      <id>mac</id>
+      <properties>
+        <javafx.platform>mac</javafx.platform>
+      </properties>
+    </profile>
+    <profile>
+      <id>linux</id>
+      <properties>
+        <javafx.platform>linux</javafx.platform>
+      </properties>
+    </profile>
+
+    <!-- Optional: jpackage profile to produce an installer/app image -->
+    <profile>
+      <id>pack</id>
+      <build>
+        <plugins>
+          <plugin>
+            <groupId>org.panteleyev</groupId>
+            <artifactId>jpackage-maven-plugin</artifactId>
+            <version>1.7.5</version>
+            <configuration>
+              <input>${project.build.directory}</input>
+              <dest>${project.build.directory}/dist</dest>
+              <name>AttendanceApp</name>
+              <mainJar>${project.artifactId}-jar-with-dependencies.jar</mainJar>
+              <type>app-image</type>
+              <!-- optional extras:
+              <icon>src/main/resources/icon.ico</icon>
+              <winMenu>true</winMenu>
+              <winShortcut>true</winShortcut>
+              -->
+            </configuration>
+            <executions>
+              <execution>
+                <goals>
+                  <goal>jpackage</goal>
+                </goals>
+              </execution>
+            </executions>
+          </plugin>
+        </plugins>
+      </build>
+    </profile>
+  </profiles>
+</project>
