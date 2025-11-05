@@ -1,6 +1,7 @@
 package ui;
 
 import java.util.*;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.stream.Collectors;
 
 import db.AccessDb;
@@ -19,6 +20,12 @@ import javafx.util.Duration;
 import javafx.scene.Node;
 
 public class Dashboard extends BorderPane {
+
+    // >>> Attendance poller state (runs ONLY on Attendance tab)
+    private volatile Thread attendancePollerThread = null;
+    private final AtomicBoolean attendancePollerRunning = new AtomicBoolean(false);
+    private final AtomicBoolean onAttendanceTab = new AtomicBoolean(false);
+    private volatile String lastSeenUid = null;
 
     // Make inputs/headings larger & cleaner without touching EntryForm code
     private void prettifyForm(Parent root) {
@@ -179,16 +186,26 @@ public class Dashboard extends BorderPane {
 
         // --- Default Content ---
         contentArea.setPadding(new Insets(20));
-        setContent("Welcome to Attendance System");
+        setContent(AttendancePage.create());
+        // >>> Mark as on Attendance initially and start poller
+        onAttendanceTab.set(true);
+        startAttendancePoller();
 
         // --- Add Components to Layout ---
         setTop(navBar);
         setCenter(contentArea);
 
         // --- Actions ---
-        attendanceBtn.setOnAction(e -> setContent(AttendancePage.create()));
+        attendanceBtn.setOnAction(e -> {
+            // >>> Switch to Attendance: ensure ONLY this tab runs the poller
+            onAttendanceTab.set(true);
+            setContent(AttendancePage.create()); // safe to refresh view
+            startAttendancePoller();
+        });
 
         entryFormBtn.setOnAction(e -> {
+            // >>> Leaving Attendance: stop poller
+            leaveAttendance();
             Parent form = EntryForm.create((formData, done) -> {
                 new Thread(() -> {
                     long dbId = -1;
@@ -269,6 +286,9 @@ public class Dashboard extends BorderPane {
         });
 
         infoBtn.setOnAction(e -> {
+            // >>> Leaving Attendance: stop poller
+            leaveAttendance();
+
             Label waitLbl = new Label("📡 Present card to read info...");
             waitLbl.setStyle("""
                         -fx-font-size: 24px;
@@ -344,6 +364,9 @@ public class Dashboard extends BorderPane {
 
         // Batch (Filter)
         batchBtn.setOnAction(e -> {
+            // >>> Leaving Attendance: stop poller
+            leaveAttendance();
+
             List<Map<String, String>> rows = BatchFilterDialog.showAndFetch(
                     this.getScene() == null ? null : this.getScene().getWindow());
             if (rows == null || rows.isEmpty())
@@ -421,10 +444,17 @@ public class Dashboard extends BorderPane {
         });
 
         // Report placeholder
-        reportBtn.setOnAction(e -> setContent("📊 Report Page"));
+        reportBtn.setOnAction(e -> {
+            // >>> Leaving Attendance: stop poller
+            leaveAttendance();
+            setContent("📊 Report Page");
+        });
 
         // NEW: Import Excel wiring
         importBtn.setOnAction(e -> {
+            // >>> Leaving Attendance: stop poller
+            leaveAttendance();
+
             int imported = ExcelImportDialog.show(
                     this.getScene() == null ? null : (javafx.stage.Stage) this.getScene().getWindow());
             if (imported >= 0) {
@@ -439,7 +469,7 @@ public class Dashboard extends BorderPane {
 
     // --- Helper Method for Page Switching with Animation ---
     private void setContent(Node node) {
-        // stop any NFC poller from previous view
+        // stop any NFC poller from previous view (EntryForm-owned pollers)
         if (!contentArea.getChildren().isEmpty()) {
             Node prev = contentArea.getChildren().get(0);
             EntryForm.stopNfcPolling(prev);
@@ -456,5 +486,93 @@ public class Dashboard extends BorderPane {
         Text newText = new Text(text);
         newText.setStyle("-fx-font-size: 20px; -fx-fill: #212121; -fx-font-weight: 600;");
         setContent(newText);
+    }
+
+    // >>> Attendance poller control
+
+    /**
+     * Start (or restart) the attendance poller. Safe to call repeatedly.
+     * Polls the reader with a short timeout and watches for a transition:
+     * CARD PRESENT -> CARD ABSENT. On removal, refresh Attendance UI so it asks to
+     * tap again.
+     */
+    private void startAttendancePoller() {
+        // If already running, keep it; otherwise start fresh
+        if (attendancePollerRunning.get())
+            return;
+
+        attendancePollerRunning.set(true);
+        attendancePollerThread = new Thread(() -> {
+            Thread.currentThread().setPriority(Thread.MIN_PRIORITY);
+            final int READ_TIMEOUT_MS = 350; // short, non-blocking-ish
+            final int IDLE_SLEEP_MS = 150; // be gentle on CPU
+
+            while (attendancePollerRunning.get()) {
+                // Run only while we're actually on the Attendance tab
+                if (!onAttendanceTab.get())
+                    break;
+
+                boolean hadCard = (lastSeenUid != null);
+                SmartMifareReader.ReadResult rr = null;
+                try {
+                    // Non-intrusive short read; exceptions are swallowed
+                    rr = SmartMifareReader.readUIDWithData(READ_TIMEOUT_MS);
+                } catch (Throwable t) {
+                    // ignore to keep the loop resilient
+                }
+
+                if (rr != null && rr.uid != null && !rr.uid.isBlank()) {
+                    // Card currently present
+                    lastSeenUid = rr.uid;
+                } else {
+                    // No card detected in this slice
+                    if (hadCard) {
+                        // Transition: card was present and now absent -> refresh view & ask to tap
+                        // again
+                        lastSeenUid = null;
+                        Platform.runLater(() -> {
+                            if (onAttendanceTab.get()) {
+                                // Recreate the Attendance page (lightweight) to show the prompt again
+                                setContent(AttendancePage.create());
+                            }
+                        });
+                    }
+                }
+
+                try {
+                    Thread.sleep(IDLE_SLEEP_MS);
+                } catch (InterruptedException ie) {
+                    Thread.currentThread().interrupt();
+                    break;
+                }
+            }
+            attendancePollerRunning.set(false);
+        }, "attendance-poller");
+        attendancePollerThread.setDaemon(true);
+        attendancePollerThread.start();
+    }
+
+    /**
+     * Called whenever we navigate away from the Attendance tab.
+     * Ensures the poller is fully stopped and state cleared (so other tabs aren't
+     * affected).
+     */
+    private void leaveAttendance() {
+        onAttendanceTab.set(false);
+        stopAttendancePoller();
+    }
+
+    private void stopAttendancePoller() {
+        if (!attendancePollerRunning.get()) {
+            lastSeenUid = null;
+            return;
+        }
+        attendancePollerRunning.set(false);
+        lastSeenUid = null;
+        Thread t = attendancePollerThread;
+        attendancePollerThread = null;
+        if (t != null) {
+            t.interrupt();
+        }
     }
 }

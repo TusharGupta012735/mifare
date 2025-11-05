@@ -50,6 +50,17 @@ public class EntryForm {
         header.setAlignment(Pos.CENTER_LEFT);
         header.setPadding(new Insets(0, 0, 12, 0));
 
+        // --- Top Center Banner (big, colorful) ---
+        Label banner = new Label();
+        banner.getStyleClass().add("status-banner");
+        banner.setId("statusBanner");
+        banner.setMaxWidth(Double.MAX_VALUE);
+        banner.setWrapText(true);
+        setBannerInfo(banner, ""); // start blank, styled
+        HBox bannerWrap = new HBox(banner);
+        bannerWrap.setAlignment(Pos.CENTER);
+        bannerWrap.setPadding(new Insets(0, 0, 12, 0));
+
         String baseStyleCore = "-fx-background-color: white; -fx-border-color: #bdbdbd; -fx-border-radius: 6; " +
                 "-fx-background-radius: 6; -fx-padding: 8 10; -fx-text-fill: #212121;";
         String labelBaseStyleCore = "-fx-font-weight:600; -fx-text-fill:#212121;";
@@ -150,6 +161,9 @@ public class EntryForm {
                 }
             }
             title.setFont(Font.font("System", FontWeight.BOLD, Math.max(16, fs + 4)));
+            // scale banner a bit with width
+            banner.setStyle(banner.getStyle().replaceAll("-fx-font-size:\\s*\\d+px;",
+                    "-fx-font-size: " + Math.max(28, fs + 14) + "px;"));
         });
 
         // Buttons
@@ -167,24 +181,17 @@ public class EntryForm {
         buttons.setAlignment(Pos.CENTER_RIGHT);
         buttons.setPadding(new Insets(10, 0, 0, 0));
 
-        Label validation = new Label();
-        validation.setStyle("-fx-text-fill:#b00020;-fx-font-size:12;");
-        validation.setWrapText(true);
-
-        Label status = new Label();
-        status.setStyle("-fx-font-size:12; -fx-text-fill:#424242;");
-        status.setWrapText(true);
-
-        VBox center = new VBox(header, columns, validation, buttons, status);
+        // --- Center content (banner at the top) ---
+        VBox center = new VBox(header, bannerWrap, columns, buttons);
         center.setSpacing(10);
         center.setPadding(new Insets(10));
         root.setCenter(center);
 
         // Save action
         saveBtn.setOnAction(e -> {
-            validation.setText("");
+            // Validation in banner
             if (fullName.getText().trim().isEmpty() || phoneNumber.getText().trim().isEmpty()) {
-                validation.setText("Please fill required fields.");
+                setBannerWarn(banner, "Please fill required fields: FullName and phoneNumber.");
                 return;
             }
 
@@ -196,8 +203,8 @@ public class EntryForm {
             String emailVal = txt(email);
             String phoneVal = txt(phoneNumber);
             String bsgStateVal = txt(bsgState);
-            String memberTypVal = txt(memberTyp); // <-- memberTyp (not memberType)
-            String unitNamVal = txt(unitNam); // <-- unitNam (not unitName)
+            String memberTypVal = txt(memberTyp); // memberTyp
+            String unitNamVal = txt(unitNam); // unitNam
             String rankVal = val(rank_or_section);
             LocalDate dobVal = dateOfBirth.getValue();
             String dobStr = dobVal == null ? "" : dobVal.toString(); // yyyy-MM-dd
@@ -214,37 +221,30 @@ public class EntryForm {
             data.put("memberTyp", memberTypVal);
             data.put("unitNam", unitNamVal);
             data.put("rank_or_section", rankVal);
-            data.put("dataOfBirth", dobStr); // <-- AccessDb expects dataOfBirth
+            data.put("dataOfBirth", dobStr); // AccessDb expects dataOfBirth
             data.put("age", ageVal);
 
             String csvForNfc = String.join(",",
                     Arrays.asList(
-                            fullNameVal,
-                            bsguidVal,
-                            participationVal,
-                            bsgDistrictVal,
-                            emailVal,
-                            phoneVal,
-                            bsgStateVal,
-                            memberTypVal,
-                            unitNamVal,
-                            rankVal,
-                            dobStr,
-                            ageVal));
+                            fullNameVal, bsguidVal, participationVal, bsgDistrictVal,
+                            emailVal, phoneVal, bsgStateVal, memberTypVal, unitNamVal,
+                            rankVal, dobStr, ageVal));
 
             data.put("__CSV__", csvForNfc);
 
             saveBtn.setDisable(true);
             clearBtn.setDisable(true);
             eraseBtn.setDisable(true);
-            status.setStyle("-fx-text-fill:#424242;");
-            status.setText("Submitting... hold card to update (if writing to card).");
+            setBannerInfo(banner, "Submitting... hold card to update (if writing to card).");
 
             if (onSave != null) {
                 Runnable done = () -> Platform.runLater(() -> {
                     saveBtn.setDisable(false);
                     clearBtn.setDisable(false);
                     eraseBtn.setDisable(false);
+                    // Leave banner as whatever Dashboard shows via Alerts; we provide a soft
+                    // success:
+                    setBannerSuccess(banner, "Submitted. (If NFC write was requested, it has finished.)");
                 });
 
                 try {
@@ -253,14 +253,13 @@ public class EntryForm {
                     saveBtn.setDisable(false);
                     clearBtn.setDisable(false);
                     eraseBtn.setDisable(false);
-                    status.setStyle("-fx-text-fill:#E74C3C;");
-                    status.setText("❌ Submit failed: " + ex.getMessage());
+                    setBannerError(banner, "❌ Submit failed: " + ex.getMessage());
                 }
             } else {
                 saveBtn.setDisable(false);
                 clearBtn.setDisable(false);
                 eraseBtn.setDisable(false);
-                status.setText("No save handler configured.");
+                setBannerWarn(banner, "No save handler configured.");
             }
         });
 
@@ -278,8 +277,7 @@ public class EntryForm {
             rank_or_section.setValue(null);
             dateOfBirth.setValue(null);
             age.clear();
-            validation.setText("");
-            status.setText("");
+            setBannerInfo(banner, "Form cleared.");
         });
 
         // Erase Card action
@@ -295,23 +293,16 @@ public class EntryForm {
                 saveBtn.setDisable(true);
                 clearBtn.setDisable(true);
                 eraseBtn.setDisable(true);
-                status.setStyle("-fx-text-fill:#424242;");
-                status.setText("Waiting for card and erasing... (present card to reader)");
+                setBannerInfo(banner, "Waiting for card and erasing... (present card to reader)");
 
                 Thread th = new Thread(() -> {
                     try {
                         setNfcBusy(true);
                         nfc.SmartMifareEraser.eraseMemory();
-                        Platform.runLater(() -> {
-                            status.setStyle("-fx-text-fill:#27AE60;");
-                            status.setText("✅ Erase complete.");
-                        });
+                        Platform.runLater(() -> setBannerSuccess(banner, "✅ Erase complete."));
                     } catch (Exception ex) {
                         final String msg = ex.getMessage() == null ? ex.toString() : ex.getMessage();
-                        Platform.runLater(() -> {
-                            status.setStyle("-fx-text-fill:#E74C3C;");
-                            status.setText("❌ Erase failed: " + msg);
-                        });
+                        Platform.runLater(() -> setBannerError(banner, "❌ Erase failed: " + msg));
                     } finally {
                         setNfcBusy(false);
                         Platform.runLater(() -> {
@@ -358,6 +349,38 @@ public class EntryForm {
         GridPane.setConstraints(lbl, 0, row);
         GridPane.setConstraints(field, 1, row);
         grid.getChildren().addAll(lbl, field);
+    }
+
+    // ---------------- Banner styling helpers ----------------
+    private static void setBannerBase(Label banner, String text, String bg, String border, String fg) {
+        banner.setText(text);
+        banner.setStyle(
+                "-fx-font-size: 32px;" +
+                        "-fx-font-weight: 900;" +
+                        "-fx-text-fill: " + fg + ";" +
+                        "-fx-background-color: " + bg + ";" +
+                        "-fx-background-radius: 10;" +
+                        "-fx-border-color: " + border + ";" +
+                        "-fx-border-radius: 10;" +
+                        "-fx-border-width: 2;" +
+                        "-fx-padding: 10 18;" +
+                        "-fx-effect: dropshadow(gaussian, rgba(0,0,0,0.08), 12, 0, 0, 2);");
+    }
+
+    private static void setBannerInfo(Label banner, String text) {
+        setBannerBase(banner, text, "#E3F2FD", "#90CAF9", "#0D47A1");
+    }
+
+    private static void setBannerSuccess(Label banner, String text) {
+        setBannerBase(banner, text, "#E8F5E9", "#A5D6A7", "#2E7D32");
+    }
+
+    private static void setBannerWarn(Label banner, String text) {
+        setBannerBase(banner, text, "#FFF8E1", "#FFE082", "#E65100");
+    }
+
+    private static void setBannerError(Label banner, String text) {
+        setBannerBase(banner, text, "#FFEBEE", "#EF9A9A", "#C62828");
     }
 
     // ---------------- NFC auto-fill helpers ----------------
@@ -515,10 +538,10 @@ public class EntryForm {
 
         // --- Top Status (centered, big & colorful) ---
         Label status = new Label(); // we'll update this everywhere
-        status.getStyleClass().add("status-banner"); // <-- tag so Dashboard won't restyle it
-        status.setId("statusBanner"); // <-- id (optional, for extra safety)
+        status.getStyleClass().add("status-banner");
+        status.setId("statusBanner");
         status.setWrapText(true);
-        status.setMaxWidth(Double.MAX_VALUE); // stretch banner background
+        status.setMaxWidth(Double.MAX_VALUE);
         status.setStyle("""
                     -fx-font-size: 40px;
                     -fx-font-weight: 900;
@@ -710,10 +733,10 @@ public class EntryForm {
             data.put("Email", em);
             data.put("phoneNumber", ph);
             data.put("bsgState", st);
-            data.put("memberTyp", mt); // canonical
-            data.put("unitNam", un); // canonical
+            data.put("memberTyp", mt);
+            data.put("unitNam", un);
             data.put("rank_or_section", rk);
-            data.put("dataOfBirth", dob); // canonical (string)
+            data.put("dataOfBirth", dob);
             data.put("age", ag);
 
             String csv = String.join(",", Arrays.asList(fn, bs, pt, bd, em, ph, st, mt, un, rk, dob, ag));
@@ -791,5 +814,4 @@ public class EntryForm {
         }
         return root;
     }
-
 }
