@@ -32,7 +32,11 @@ public class Dashboard extends BorderPane {
                         -fx-border-color: #BDBDBD;
                         -fx-border-radius: 8;
                     """);
+            if (n instanceof Region r) {
+                r.setMinHeight(36);
+            }
         }
+
         // ComboBoxes
         for (Node n : root.lookupAll(".combo-box")) {
             n.setStyle("""
@@ -43,7 +47,14 @@ public class Dashboard extends BorderPane {
                         -fx-border-color: #BDBDBD;
                         -fx-border-radius: 8;
                     """);
+            if (n instanceof ComboBox<?> cb) {
+                cb.setVisibleRowCount(12);
+            }
+            if (n instanceof Region r) {
+                r.setMinHeight(36);
+            }
         }
+
         // DatePickers
         for (Node n : root.lookupAll(".date-picker")) {
             n.setStyle("""
@@ -54,7 +65,11 @@ public class Dashboard extends BorderPane {
                         -fx-border-color: #BDBDBD;
                         -fx-border-radius: 8;
                     """);
+            if (n instanceof Region r) {
+                r.setMinHeight(36);
+            }
         }
+
         // TextAreas
         for (Node n : root.lookupAll(".text-area")) {
             n.setStyle("""
@@ -66,13 +81,16 @@ public class Dashboard extends BorderPane {
                         -fx-border-radius: 8;
                     """);
         }
-        // Labels (only those inside form – this call is on the batch parent, not
-        // navbar)
+
+        // Labels (only inside form – skip the big status banner)
         for (Node n : root.lookupAll(".label")) {
-            // bump headings more if they already look like section titles
+            if (n.getStyleClass().contains("status-banner") || "statusBanner".equals(n.getId())) {
+                continue; // don't override the banner styling
+            }
             n.setStyle("-fx-font-size: 14px; -fx-text-fill: #263238;");
         }
-        // Buttons
+
+        // Buttons (only inside the batch form container)
         for (Node n : root.lookupAll(".button")) {
             n.setStyle("""
                         -fx-background-color: #1976D2;
@@ -102,11 +120,9 @@ public class Dashboard extends BorderPane {
                         -fx-cursor: hand;
                     """));
         }
-        // Optional: card-like background if the batch root is a Pane
+
         if (root instanceof Region r) {
-            r.setStyle("""
-                        -fx-background-color: transparent;
-                    """);
+            r.setStyle("-fx-background-color: transparent;");
         }
     }
 
@@ -119,6 +135,7 @@ public class Dashboard extends BorderPane {
         Button infoBtn = new Button("Information");
         Button batchBtn = new Button("Batch (Filter)");
         Button reportBtn = new Button("Report");
+        Button importBtn = new Button("Import Excel"); // NEW
 
         // --- Common Button Style ---
         String btnStyle = """
@@ -143,19 +160,19 @@ public class Dashboard extends BorderPane {
                     -fx-effect: dropshadow(gaussian, rgba(0,0,0,0.3), 6, 0, 0, 2);
                 """;
 
-        for (Button btn : new Button[] { attendanceBtn, entryFormBtn, batchBtn, reportBtn, infoBtn }) {
+        for (Button btn : new Button[] { attendanceBtn, entryFormBtn, batchBtn, reportBtn, infoBtn, importBtn }) {
             btn.setStyle(btnStyle);
             btn.setOnMouseEntered(e -> btn.setStyle(hoverStyle));
             btn.setOnMouseExited(e -> btn.setStyle(btnStyle));
         }
 
-        // --- Navbar Layout ---
-        HBox navBar = new HBox(20, attendanceBtn, entryFormBtn, batchBtn, reportBtn, infoBtn);
+        // --- Navbar Layout (added Import Excel at the end) ---
+        HBox navBar = new HBox(20, attendanceBtn, entryFormBtn, batchBtn, reportBtn, infoBtn, importBtn);
         navBar.setPadding(new Insets(15, 20, 15, 20));
         navBar.setStyle(
                 "-fx-background-color: linear-gradient(to bottom, #1565c0, #0d47a1); -fx-alignment: center; -fx-effect: dropshadow(gaussian, rgba(0,0,0,0.2), 8, 0, 0, 2);");
 
-        for (Button btn : new Button[] { attendanceBtn, entryFormBtn, batchBtn, reportBtn, infoBtn }) {
+        for (Button btn : new Button[] { attendanceBtn, entryFormBtn, batchBtn, reportBtn, infoBtn, importBtn }) {
             HBox.setHgrow(btn, Priority.ALWAYS);
             btn.setMaxWidth(Double.MAX_VALUE);
         }
@@ -176,7 +193,6 @@ public class Dashboard extends BorderPane {
                 new Thread(() -> {
                     long dbId = -1;
                     try {
-                        // Build NFC payload
                         String textToWrite = formData.get("__CSV__");
                         if (textToWrite == null) {
                             textToWrite = formData.values().stream()
@@ -184,7 +200,6 @@ public class Dashboard extends BorderPane {
                                     .collect(Collectors.joining(","));
                         }
 
-                        // Guard: ensure pollers pause while writing
                         EntryForm.setNfcBusy(true);
                         String cardUid = null;
                         try {
@@ -209,14 +224,12 @@ public class Dashboard extends BorderPane {
                             } catch (InterruptedException ie) {
                                 Thread.currentThread().interrupt();
                             }
-                            if (!proceed[0]) {
+                            if (!proceed[0])
                                 return;
-                            }
                         } finally {
                             EntryForm.setNfcBusy(false);
                         }
 
-                        // Insert into DB (also updates ParticipantsRecord)
                         try {
                             dbId = AccessDb.insertAttendee(formData, cardUid);
                         } catch (Exception dbEx) {
@@ -272,14 +285,12 @@ public class Dashboard extends BorderPane {
             setContent(new StackPane(waitLbl));
 
             new Thread(() -> {
-                // Pause pollers while doing a blocking read
                 EntryForm.setNfcBusy(true);
                 SmartMifareReader.ReadResult rr = null;
                 try {
                     rr = SmartMifareReader.readUIDWithData(10_000);
                 } catch (Exception ex) {
-                    // ignore here, show message below
-                } finally {
+                    /* ignore */ } finally {
                     EntryForm.setNfcBusy(false);
                 }
 
@@ -331,7 +342,7 @@ public class Dashboard extends BorderPane {
             }, "info-read-thread").start();
         });
 
-        // NEW: Batch (Filter)
+        // Batch (Filter)
         batchBtn.setOnAction(e -> {
             List<Map<String, String>> rows = BatchFilterDialog.showAndFetch(
                     this.getScene() == null ? null : this.getScene().getWindow());
@@ -352,7 +363,7 @@ public class Dashboard extends BorderPane {
 
             java.util.concurrent.atomic.AtomicInteger processed = new java.util.concurrent.atomic.AtomicInteger(0);
 
-            // Create your SAME editable form UI
+            // SAME editable form UI
             Parent batch = EntryForm.createBatch((formData, done) -> {
                 new Thread(() -> {
                     try {
@@ -401,7 +412,7 @@ public class Dashboard extends BorderPane {
                 }, "batch-filter-thread").start();
             }, rows);
 
-            // 🔹 Make the existing form look cleaner/bigger WITHOUT changing its structure
+            // Make the existing form look cleaner/bigger WITHOUT changing its structure
             prettifyForm(batch);
 
             VBox page = new VBox(0, bannerWrap, batch);
@@ -409,7 +420,21 @@ public class Dashboard extends BorderPane {
             setContent(page);
         });
 
+        // Report placeholder
         reportBtn.setOnAction(e -> setContent("📊 Report Page"));
+
+        // NEW: Import Excel wiring
+        importBtn.setOnAction(e -> {
+            int imported = ExcelImportDialog.show(
+                    this.getScene() == null ? null : (javafx.stage.Stage) this.getScene().getWindow());
+            if (imported >= 0) {
+                Alert a = new Alert(Alert.AlertType.INFORMATION,
+                        imported + " row(s) imported with status='F'. You can now use Batch (Filter).",
+                        ButtonType.OK);
+                a.setHeaderText(null);
+                a.showAndWait();
+            }
+        });
     }
 
     // --- Helper Method for Page Switching with Animation ---

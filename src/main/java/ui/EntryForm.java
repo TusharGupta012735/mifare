@@ -13,8 +13,6 @@ import javafx.scene.text.Font;
 import javafx.scene.text.FontWeight;
 import javafx.stage.Window;
 import nfc.SmartMifareReader;
-import nfc.SmartMifareEraser;
-
 import java.time.LocalDate;
 import java.util.*;
 import java.util.concurrent.Executors;
@@ -510,16 +508,32 @@ public class EntryForm {
     // ---------- Batch UI ----------
     public static Parent createBatch(BiConsumer<Map<String, String>, Runnable> onSave,
             List<Map<String, String>> batchRows) {
+
         BorderPane root = new BorderPane();
         root.setPadding(new Insets(14));
         root.setStyle("-fx-background-color: linear-gradient(to bottom, #ffffff, #f7f9fb);");
 
-        Label title = new Label("📂 Batch Upload");
-        title.setFont(Font.font("System", FontWeight.BOLD, 20));
-        HBox header = new HBox(title);
-        header.setAlignment(Pos.CENTER_LEFT);
-        header.setPadding(new Insets(0, 0, 10, 0));
+        // --- Top Status (centered, big & colorful) ---
+        Label status = new Label(); // we'll update this everywhere
+        status.getStyleClass().add("status-banner"); // <-- tag so Dashboard won't restyle it
+        status.setId("statusBanner"); // <-- id (optional, for extra safety)
+        status.setWrapText(true);
+        status.setMaxWidth(Double.MAX_VALUE); // stretch banner background
+        status.setStyle("""
+                    -fx-font-size: 40px;
+                    -fx-font-weight: 900;
+                    -fx-text-fill: #0D47A1;
+                    -fx-background-color: #E3F2FD;
+                    -fx-background-radius: 8;
+                    -fx-padding: 10 18;
+                """);
 
+        HBox statusWrap = new HBox(status);
+        statusWrap.setAlignment(Pos.CENTER);
+        statusWrap.setPadding(new Insets(6, 0, 12, 0));
+        HBox.setHgrow(status, Priority.ALWAYS);
+
+        // --- Inputs ---
         TextField fullName = new TextField();
         TextField bsguid = new TextField();
         ComboBox<String> participationType = new ComboBox<>();
@@ -559,16 +573,14 @@ public class EntryForm {
         HBox columns = new HBox(40, left, right);
         columns.setPadding(new Insets(8));
 
-        Label status = new Label();
-        status.setWrapText(true);
-
         Button writeNextBtn = new Button("Write & Next");
         Button skipBtn = new Button("Skip / Next");
         Button stopBtn = new Button("Stop Batch");
         HBox controls = new HBox(10, writeNextBtn, skipBtn, stopBtn);
         controls.setAlignment(Pos.CENTER_RIGHT);
 
-        VBox center = new VBox(12, header, columns, status, controls);
+        // --- Center layout (status moved to TOP) ---
+        VBox center = new VBox(8, statusWrap, columns, controls);
         center.setPadding(new Insets(10));
         root.setCenter(center);
 
@@ -630,10 +642,10 @@ public class EntryForm {
             if (!r.isEmpty())
                 rank_or_section.setValue(r);
 
-            // date key from DB fetch is "dataOfBirth"
+            // accept both dataOfBirth and dateOfBirth
             String dob = pick.apply(cur, "dataOfBirth");
             if (dob.isEmpty())
-                dob = pick.apply(cur, "dateOfBirth"); // fallback
+                dob = pick.apply(cur, "dateOfBirth");
             if (!dob.isEmpty()) {
                 try {
                     dateOfBirth.setValue(LocalDate.parse(dob));
@@ -644,6 +656,7 @@ public class EntryForm {
                 dateOfBirth.setValue(null);
             }
             age.setText(pick.apply(cur, "age"));
+
             status.setText("Record " + (index[0] + 1) + " / " + total);
         };
 
@@ -654,6 +667,8 @@ public class EntryForm {
             stopBtn.setDisable(true);
         } else {
             fillCurrent.run();
+            status.setText(
+                    "Ready for record " + (index[0] + 1) + " / " + total + " — Present card and click Write & Next.");
         }
 
         writeNextBtn.setOnAction(evt -> {
@@ -695,10 +710,10 @@ public class EntryForm {
             data.put("Email", em);
             data.put("phoneNumber", ph);
             data.put("bsgState", st);
-            data.put("memberTyp", mt); // <-- canonical
-            data.put("unitNam", un); // <-- canonical
+            data.put("memberTyp", mt); // canonical
+            data.put("unitNam", un); // canonical
             data.put("rank_or_section", rk);
-            data.put("dataOfBirth", dob); // <-- canonical
+            data.put("dataOfBirth", dob); // canonical (string)
             data.put("age", ag);
 
             String csv = String.join(",", Arrays.asList(fn, bs, pt, bd, em, ph, st, mt, un, rk, dob, ag));
@@ -722,16 +737,15 @@ public class EntryForm {
                     skipBtn.setDisable(false);
                     stopBtn.setDisable(false);
                     status.setText("Ready for record " + (index[0] + 1) + " / " + total
-                            + ". Present card and click Write & Next.");
+                            + " — Present card and click Write & Next.");
                 }
             });
 
             try {
-                if (onSave != null) {
+                if (onSave != null)
                     onSave.accept(data, done);
-                } else {
+                else
                     done.run();
-                }
             } catch (Exception ex) {
                 Platform.runLater(() -> {
                     status.setText("Write failed: " + ex.getMessage());
@@ -775,7 +789,7 @@ public class EntryForm {
         if (svc != null) {
             root.getProperties().put("nfc-poller", svc);
         }
-
         return root;
     }
+
 }

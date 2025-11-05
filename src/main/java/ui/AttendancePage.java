@@ -35,6 +35,18 @@ public class AttendancePage {
      * Create the attendance UI. Caller can set it into the scene via
      * setContent(AttendancePage.create()).
      */
+
+     // Result of a tap attempt
+    public static final class TapResult {
+        public final boolean success;
+        public final String message; // e.g., "Marked present: John (BSG123)"
+
+        public TapResult(boolean success, String message) {
+            this.success = success;
+            this.message = message;
+        }
+    }
+
     public static Parent create() {
         // Root container that can grow to fill the parent
         VBox root = new VBox(12);
@@ -43,7 +55,7 @@ public class AttendancePage {
         // allow root to expand in both directions when placed inside a resizable parent
         root.setMaxSize(Double.MAX_VALUE, Double.MAX_VALUE);
 
-        Label status = new Label("📡 Waiting for card...");
+        Label status = new Label("📡 Tap your card");
         status.setStyle("""
                     -fx-font-size: 24px;
                     -fx-font-weight: bold;
@@ -61,7 +73,7 @@ public class AttendancePage {
         // Start background thread to read NFC card and update UI
         new Thread(() -> {
             // blocking read (10s timeout)
-            SmartMifareReader.ReadResult rr = SmartMifareReader.readUIDWithData(10_000);
+            SmartMifareReader.ReadResult rr = SmartMifareReader.readUIDWithData(0);
             String uid = (rr == null) ? "" : rr.uid;
 
             LocalDate nowDate = LocalDate.now();
@@ -73,9 +85,9 @@ public class AttendancePage {
             String timeStr = timeFmt.format(nowTime);
 
             // read location.txt (best-effort) from current working directory
-            String location = "Room x";
+            String location = "Room X";
             try {
-                Path p = Paths.get("location.txt");
+                Path p = Paths.get("src/main/resources/location.txt");
                 if (Files.exists(p)) {
                     String raw = Files.readString(p).trim();
                     if (!raw.isEmpty())
@@ -87,11 +99,24 @@ public class AttendancePage {
 
             String name = extractName(rr);
 
+            String event_name = "Event X";
+            try {
+                Path p = Paths.get("src/main/resources/event.txt");
+                if (Files.exists(p)) {
+                    String raw = Files.readString(p).trim();
+                    if (!raw.isEmpty())
+                        event_name = raw;
+                }
+            } catch (Exception ex) {
+                event_name = "(error reading event name)";
+            }
+
             final String finalUid = (uid == null || uid.isEmpty()) ? "(not read)" : uid;
             final String finalName = (name == null || name.isEmpty()) ? "(unknown)" : name;
             final String finalDate = dateStr;
             final String finalTime = timeStr;
             final String finalLocation = location;
+            final String finalEventName = event_name;
 
             Platform.runLater(() -> {
                 if (rr == null || rr.uid == null || rr.uid.isEmpty()) {
@@ -170,6 +195,7 @@ public class AttendancePage {
                 addKV.accept(r++, new Pair<>("Time", finalTime));
                 addKV.accept(r++, new Pair<>("Date", finalDate));
                 addKV.accept(r++, new Pair<>("Location", finalLocation));
+                addKV.accept(r++, new Pair<>("Event", finalEventName));
 
                 // Wrap table into ScrollPane so it can expand and scroll when necessary
                 ScrollPane sp = new ScrollPane(table);
