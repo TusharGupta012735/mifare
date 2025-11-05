@@ -36,7 +36,7 @@ public class AttendancePage {
      * setContent(AttendancePage.create()).
      */
 
-     // Result of a tap attempt
+    // Result of a tap attempt
     public static final class TapResult {
         public final boolean success;
         public final String message; // e.g., "Marked present: John (BSG123)"
@@ -75,6 +75,7 @@ public class AttendancePage {
             // blocking read (10s timeout)
             SmartMifareReader.ReadResult rr = SmartMifareReader.readUIDWithData(0);
             String uid = (rr == null) ? "" : rr.uid;
+            System.out.println("CARD UID READ = [" + uid + "]");
 
             LocalDate nowDate = LocalDate.now();
             LocalTime nowTime = LocalTime.now();
@@ -97,7 +98,7 @@ public class AttendancePage {
                 location = "(error reading location)";
             }
 
-            String name = extractName(rr);
+            String nameFromCard = extractName(rr);
 
             String event_name = "Event X";
             try {
@@ -111,8 +112,19 @@ public class AttendancePage {
                 event_name = "(error reading event name)";
             }
 
+            // ---- Centralized DB call: insert into trans only if CardUID is registered
+            // ----
+            int inserted = 0;
+            try {
+                inserted = db.AccessDb.insertTrans(uid, location, event_name);
+            } catch (Exception ex) {
+                System.out.println("⚠ insertTrans error: " + ex.getMessage());
+            }
+            boolean isRegistered = inserted == 1;
+            // --------------------------------------------------------------------------------
+
             final String finalUid = (uid == null || uid.isEmpty()) ? "(not read)" : uid;
-            final String finalName = (name == null || name.isEmpty()) ? "(unknown)" : name;
+            final String finalName = (nameFromCard == null || nameFromCard.isEmpty()) ? "(unknown)" : nameFromCard;
             final String finalDate = dateStr;
             final String finalTime = timeStr;
             final String finalLocation = location;
@@ -136,7 +148,24 @@ public class AttendancePage {
                     return;
                 }
 
-                // Build table
+                if (!isRegistered) {
+                    Label err = new Label("🚫 Card not registered");
+                    err.setStyle("""
+                                -fx-font-size: 20px;
+                                -fx-font-weight: bold;
+                                -fx-text-fill: #C62828;
+                                -fx-background-color: #FFEBEE;
+                                -fx-padding: 16 20;
+                                -fx-background-radius: 8;
+                                -fx-border-color: #C62828;
+                                -fx-border-radius: 8;
+                                -fx-border-width: 2;
+                            """);
+                    root.getChildren().setAll(err);
+                    return;
+                }
+
+                // Build table (success path)
                 GridPane table = new GridPane();
                 table.setVgap(12);
                 table.setHgap(18);

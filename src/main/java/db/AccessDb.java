@@ -945,6 +945,7 @@ public class AccessDb {
             }
         }
     }
+
     // Helpers
     private static String safe(Map<String, String> r, String k) {
         if (r == null)
@@ -952,4 +953,60 @@ public class AccessDb {
         String v = r.get(k);
         return (v == null ? null : v.trim());
     }
+
+    // === NEW: write a tap into [trans] and auto-fill name/BSGUID ===
+    public static int insertTrans(String cardUid, String location, String eventName) throws SQLException {
+        if (cardUid == null || cardUid.trim().isEmpty())
+            return 0;
+
+        // Normalize UID: remove colons, dashes, spaces, make uppercase
+        String uid = cardUid.replaceAll("[^A-Za-z0-9]", "").toUpperCase();
+
+        String fullName = null;
+        String bsguid = null;
+
+        String dateTime = java.time.LocalDateTime.now()
+                .format(java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss"));
+
+        try (Connection c = getConnection()) {
+
+            // Check if registered (normalize CardUID column the same way!)
+            String sel = """
+                        SELECT TOP 1 [FullName],[BSGUID]
+                        FROM [ParticipantsRecord]
+                        WHERE UCASE(REPLACE(REPLACE(REPLACE(TRIM([CardUID]), ':', ''), '-', ''), ' ', '')) = ?
+                    """;
+
+            try (PreparedStatement ps = c.prepareStatement(sel)) {
+                ps.setString(1, uid);
+                try (ResultSet rs = ps.executeQuery()) {
+                    if (rs.next()) {
+                        fullName = rs.getString("FullName");
+                        bsguid = rs.getString("BSGUID");
+                    }
+                }
+            }
+
+            // Not registered → do not insert → UI will show "Card not registered"
+            if (bsguid == null || bsguid.isBlank())
+                return 0;
+
+            // Insert into trans
+            String ins = """
+                        INSERT INTO [trans] ([carduid],[bsguid],[fullname],[date_time],[location],[event])
+                        VALUES (?,?,?,?,?,?)
+                    """;
+
+            try (PreparedStatement ps = c.prepareStatement(ins)) {
+                ps.setString(1, uid); // already normalized
+                ps.setString(2, bsguid);
+                ps.setString(3, fullName);
+                ps.setString(4, dateTime);
+                ps.setString(5, location);
+                ps.setString(6, eventName);
+                return ps.executeUpdate(); // returns 1 on success
+            }
+        }
+    }
+
 }
