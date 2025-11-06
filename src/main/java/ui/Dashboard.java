@@ -205,82 +205,116 @@ public class Dashboard extends BorderPane {
             startAttendancePoller();
         });
 
+        // --- Entry Form ---
         entryFormBtn.setOnAction(e -> {
-            leaveAttendance();
+            leaveAttendance(); // stop attendance poller
+
             Parent form = EntryForm.create((formData, done) -> {
-                new Thread(() -> {
-                    long dbId = -1;
+                // Do NFC + DB work off the UI thread
+                Thread t = new Thread(() -> {
+                    String uid = null;
                     try {
-                        String textToWrite = formData.get("__CSV__");
-                        if (textToWrite == null) {
-                            textToWrite = formData.values().stream()
+                        // Build CSV if not present
+                        String csv = formData.get("__CSV__");
+                        if (csv == null) {
+                            csv = formData.values().stream()
                                     .map(v -> v == null ? "" : v.trim())
-                                    .collect(Collectors.joining(","));
+                                    .collect(java.util.stream.Collectors.joining(","));
                         }
 
+                        // Make sure only one NFC op runs at a time
                         EntryForm.setNfcBusy(true);
-                        String cardUid = null;
-                        try {
-                            SmartMifareWriter.WriteResult result = SmartMifareWriter.writeText(textToWrite);
-                            if (result != null)
-                                cardUid = result.uid;
-                        } catch (Exception nfcEx) {
-                            final java.util.concurrent.CountDownLatch latch = new java.util.concurrent.CountDownLatch(
-                                    1);
-                            final boolean[] proceed = new boolean[1];
-                            Platform.runLater(() -> {
-                                Alert warn = new Alert(Alert.AlertType.CONFIRMATION,
-                                        "Writing to NFC card failed: " + nfcEx.getMessage() + "\n\n" +
-                                                "Continue and save to DB without assigning a card?",
-                                        ButtonType.YES, ButtonType.NO);
-                                warn.setHeaderText(null);
-                                proceed[0] = warn.showAndWait().filter(b -> b == ButtonType.YES).isPresent();
-                                latch.countDown();
-                            });
-                            try {
-                                latch.await();
-                            } catch (InterruptedException ie) {
-                                Thread.currentThread().interrupt();
-                            }
-                            if (!proceed[0])
-                                return;
-                        } finally {
-                            EntryForm.setNfcBusy(false);
-                        }
 
+                        // 1) Wait for card (blocks until present)
+                        nfc.SmartMifareReader.ReadResult present;
                         try {
-                            dbId = AccessDb.insertAttendee(formData, cardUid);
-                        } catch (Exception dbEx) {
-                            final String msg = "DB insert failed: " + dbEx.getMessage();
+                            present = nfc.SmartMifareReader.readUIDWithData(0); // 0 = infinite wait
+                        } catch (Throwable ex) {
+                            present = null;
+                        }
+                        if (present == null || present.uid == null || present.uid.isBlank()) {
                             Platform.runLater(() -> {
-                                Alert alert = new Alert(Alert.AlertType.ERROR, msg, ButtonType.OK);
-                                alert.setHeaderText(null);
-                                alert.showAndWait();
+                                Alert a = new Alert(Alert.AlertType.ERROR,
+                                        "No card detected. Please present a card and try again.",
+                                        ButtonType.OK);
+                                a.setHeaderText(null);
+                                a.showAndWait();
+                            });
+                            return;
+                        }
+                        uid = present.uid;
+
+                        // 2) Write to card
+                        nfc.SmartMifareWriter.WriteResult wr;
+                        try {
+                            wr = nfc.SmartMifareWriter.writeText(csv);
+                        } catch (Throwable ex) {
+                            wr = null;
+                        }
+                        if (wr == null) {
+                            Platform.runLater(() -> {
+                                Alert a = new Alert(Alert.AlertType.ERROR,
+                                        "Writing to the card failed.",
+                                        ButtonType.OK);
+                                a.setHeaderText(null);
+                                a.showAndWait();
                             });
                             return;
                         }
 
-                        final long idFinal = dbId;
+                        // 3) Quick verify while card still present (UID match is enough)
+                        nfc.SmartMifareReader.ReadResult verify = null;
+                        try {
+                            verify = nfc.SmartMifareReader.readUIDWithData(800);
+                        } catch (Throwable ignore) {
+                        }
+                        if (verify == null || verify.uid == null || !uid.equalsIgnoreCase(verify.uid)) {
+                            Platform.runLater(() -> {
+                                Alert a = new Alert(Alert.AlertType.ERROR,
+                                        "Could not verify the card after writing.",
+                                        ButtonType.OK);
+                                a.setHeaderText(null);
+                                a.showAndWait();
+                            });
+                            return;
+                        }
+
+                        // 4) DB insert (your AccessDb is already guarded to only mark T when CardUID is
+                        // non-empty)
+                        try {
+                            db.AccessDb.insertAttendee(formData, uid);
+                        } catch (Exception dbEx) {
+                            final String msg = dbEx.getMessage() == null ? dbEx.toString() : dbEx.getMessage();
+                            Platform.runLater(() -> {
+                                Alert a = new Alert(Alert.AlertType.ERROR,
+                                        "DB insert failed: " + msg,
+                                        ButtonType.OK);
+                                a.setHeaderText(null);
+                                a.showAndWait();
+                            });
+                            return;
+                        }
+
+                        // Success toast
+                        final String uidFinal = uid;
+                        final String name = formData.getOrDefault("FullName", "(no name)");
                         Platform.runLater(() -> {
                             Alert ok = new Alert(Alert.AlertType.INFORMATION,
-                                    "Saved successfully to database. (id=" + idFinal + ")",
+                                    "Saved: " + name + " — UID " + uidFinal,
                                     ButtonType.OK);
                             ok.setHeaderText(null);
                             ok.showAndWait();
                         });
 
-                    } catch (Exception ex2) {
-                        final String err = ex2.getMessage() == null ? ex2.toString() : ex2.getMessage();
-                        Platform.runLater(() -> {
-                            Alert a = new Alert(Alert.AlertType.ERROR, "Operation failed: " + err, ButtonType.OK);
-                            a.setHeaderText(null);
-                            a.showAndWait();
-                        });
                     } finally {
+                        EntryForm.setNfcBusy(false);
                         if (done != null)
                             done.run();
                     }
-                }, "writer-db-thread").start();
+                }, "entryform-write-thread");
+
+                t.setDaemon(true);
+                t.start();
             });
 
             setContent(form);
@@ -309,52 +343,115 @@ public class Dashboard extends BorderPane {
 
             java.util.concurrent.atomic.AtomicInteger processed = new java.util.concurrent.atomic.AtomicInteger(0);
 
-            Parent batch = EntryForm.createBatch((formData, done) -> {
-                new Thread(() -> {
+            Parent batch = EntryForm.createBatch((formData, finish) -> {
+                Thread t = new Thread(() -> {
+                    String uid = null;
                     try {
+                        // Build CSV if missing
                         String textToWrite = formData.get("__CSV__");
                         if (textToWrite == null) {
                             textToWrite = formData.values().stream()
                                     .map(v -> v == null ? "" : v.trim())
-                                    .collect(Collectors.joining(","));
+                                    .collect(java.util.stream.Collectors.joining(","));
                         }
 
-                        String cardUid = null;
+                        // STRICT, SEQUENTIAL, FAIL-FAST
                         EntryForm.setNfcBusy(true);
-                        try {
-                            SmartMifareWriter.WriteResult wr = SmartMifareWriter.writeText(textToWrite);
-                            if (wr != null)
-                                cardUid = wr.uid;
-                        } catch (Exception nfcEx) {
-                            System.err.println("[WARN] NFC write failed: " + nfcEx.getMessage());
-                        } finally {
-                            EntryForm.setNfcBusy(false);
-                        }
 
+                        // 1) Wait for card & read UID (block until present)
+                        nfc.SmartMifareReader.ReadResult present = null;
                         try {
-                            AccessDb.insertAttendee(formData, cardUid);
-                            int doneCount = processed.incrementAndGet();
-                            Platform.runLater(() -> {
-                                banner.setText("Processed " + doneCount + " / " + total);
-                                Alert ok = new Alert(Alert.AlertType.INFORMATION,
-                                        "Saved: " + formData.getOrDefault("FullName", "(no name)"),
-                                        ButtonType.OK);
-                                ok.setHeaderText(null);
-                                ok.showAndWait();
-                            });
-                        } catch (Exception dbEx) {
+                            present = nfc.SmartMifareReader.readUIDWithData(0); // infinite wait
+                        } catch (Throwable ignored) {
+                        }
+                        if (present == null || present.uid == null || present.uid.isBlank()) {
                             Platform.runLater(() -> {
                                 Alert alert = new Alert(Alert.AlertType.ERROR,
-                                        "DB insert failed: " + dbEx.getMessage(), ButtonType.OK);
+                                        "No card detected. Please present a card and try again.",
+                                        ButtonType.OK);
                                 alert.setHeaderText(null);
                                 alert.showAndWait();
                             });
+                            finish.accept(false); // stay on same record
+                            return;
                         }
+                        uid = present.uid;
+
+                        // 2) WRITE to card
+                        nfc.SmartMifareWriter.WriteResult wr;
+                        try {
+                            wr = nfc.SmartMifareWriter.writeText(textToWrite);
+                        } catch (Throwable ex) {
+                            wr = null;
+                        }
+                        if (wr == null) {
+                            Platform.runLater(() -> {
+                                Alert alert = new Alert(Alert.AlertType.ERROR,
+                                        "Writing to the card failed. Nothing was saved to the database.",
+                                        ButtonType.OK);
+                                alert.setHeaderText(null);
+                                alert.showAndWait();
+                            });
+                            finish.accept(false);
+                            return;
+                        }
+
+                        // 3) QUICK VERIFY (UID should still match while card is present)
+                        nfc.SmartMifareReader.ReadResult verify = null;
+                        try {
+                            verify = nfc.SmartMifareReader.readUIDWithData(800);
+                        } catch (Throwable ignored) {
+                        }
+                        if (verify == null || verify.uid == null || verify.uid.isBlank()
+                                || !uid.equalsIgnoreCase(verify.uid)) {
+                            Platform.runLater(() -> {
+                                Alert alert = new Alert(Alert.AlertType.ERROR,
+                                        "Could not verify the card after writing. Nothing was saved to the database.",
+                                        ButtonType.OK);
+                                alert.setHeaderText(null);
+                                alert.showAndWait();
+                            });
+                            finish.accept(false);
+                            return;
+                        }
+
+                        // 4) DB INSERT — only after successful read + write + verify
+                        try {
+                            db.AccessDb.insertAttendee(formData, uid);
+                        } catch (Exception dbEx) {
+                            final String msg = dbEx.getMessage() == null ? dbEx.toString() : dbEx.getMessage();
+                            Platform.runLater(() -> {
+                                Alert alert = new Alert(Alert.AlertType.ERROR,
+                                        "DB insert failed: " + msg,
+                                        ButtonType.OK);
+                                alert.setHeaderText(null);
+                                alert.showAndWait();
+                            });
+                            finish.accept(false);
+                            return;
+                        }
+
+                        // SUCCESS UI + counter only after DB success
+                        int doneCount = processed.incrementAndGet();
+                        final String name = formData.getOrDefault("FullName", "(no name)");
+                        final String uidFinal = uid;
+                        Platform.runLater(() -> {
+                            banner.setText("Processed " + doneCount + " / " + total);
+                            Alert ok = new Alert(Alert.AlertType.INFORMATION,
+                                    "Saved: " + name + " — UID " + uidFinal,
+                                    ButtonType.OK);
+                            ok.setHeaderText(null);
+                            ok.showAndWait();
+                        });
+
+                        finish.accept(true); // advance to next record
+
                     } finally {
-                        if (done != null)
-                            done.run();
+                        EntryForm.setNfcBusy(false);
                     }
-                }, "batch-filter-thread").start();
+                }, "batch-write-thread");
+                t.setDaemon(true);
+                t.start();
             }, rows);
 
             // Make the existing form look cleaner/bigger WITHOUT changing its structure

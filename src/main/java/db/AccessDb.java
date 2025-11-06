@@ -12,6 +12,30 @@ public class AccessDb {
 
     // -------------------- small helpers (keys & parsing) --------------------
 
+    // Clear card assignment: set status='F' and remove CardUID for the given card
+    // UID.
+    // Returns number of rows updated (0 if none).
+    public static int clearCardAssignment(String cardUid) throws SQLException {
+        if (cardUid == null || cardUid.trim().isEmpty())
+            return 0;
+
+        // Normalize UID: strip non-alnum and uppercase
+        String uid = cardUid.replaceAll("[^A-Za-z0-9]", "").toUpperCase(Locale.ROOT);
+
+        try (Connection c = getConnection()) {
+            String sql = """
+                        UPDATE [ParticipantsRecord]
+                           SET [status] = 'F',
+                               [CardUID] = NULL
+                         WHERE UCASE(REPLACE(REPLACE(REPLACE(TRIM([CardUID]), ':', ''), '-', ''), ' ', '')) = ?
+                    """;
+            try (PreparedStatement ps = c.prepareStatement(sql)) {
+                ps.setString(1, uid);
+                return ps.executeUpdate();
+            }
+        }
+    }
+
     private static String firstNonBlank(Map<String, String> data, String... keys) {
         for (String k : keys) {
             String v = data.get(k);

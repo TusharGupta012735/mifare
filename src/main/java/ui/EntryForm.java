@@ -21,6 +21,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BiConsumer;
+import java.util.function.Consumer;
 
 public class EntryForm {
 
@@ -290,19 +291,65 @@ public class EntryForm {
             confirm.showAndWait().ifPresent(btn -> {
                 if (btn != ButtonType.OK)
                     return;
+
                 saveBtn.setDisable(true);
                 clearBtn.setDisable(true);
                 eraseBtn.setDisable(true);
-                setBannerInfo(banner, "Waiting for card and erasing... (present card to reader)");
+                setBannerInfo(banner, "Hold the card steady: reading UID…");
 
                 Thread th = new Thread(() -> {
                     try {
                         setNfcBusy(true);
-                        nfc.SmartMifareEraser.eraseMemory();
-                        Platform.runLater(() -> setBannerSuccess(banner, "✅ Erase complete."));
-                    } catch (Exception ex) {
-                        final String msg = ex.getMessage() == null ? ex.toString() : ex.getMessage();
-                        Platform.runLater(() -> setBannerError(banner, "❌ Erase failed: " + msg));
+
+                        // 1) Read UID (block until card present)
+                        nfc.SmartMifareReader.ReadResult present = null;
+                        try {
+                            present = nfc.SmartMifareReader.readUIDWithData(0); // infinite wait
+                        } catch (Exception ignore) {
+                        }
+
+                        if (present == null || present.uid == null || present.uid.isBlank()) {
+                            Platform.runLater(() -> setBannerError(banner,
+                                    "❌ No card detected. Please present a card and try again."));
+                            return;
+                        }
+                        final String uid = present.uid;
+
+                        Platform.runLater(
+                                () -> setBannerInfo(banner, "Erasing card data… please keep the card on the reader."));
+
+                        // 2) Erase
+                        try {
+                            nfc.SmartMifareEraser.eraseMemory();
+                        } catch (Exception ex) {
+                            final String msg = ex.getMessage() == null ? ex.toString() : ex.getMessage();
+                            Platform.runLater(() -> setBannerError(banner, "❌ Erase failed: " + msg));
+                            return;
+                        }
+
+                        // 3) Clear DB assignment: status='F', CardUID=NULL
+                        int rows = 0;
+                        try {
+                            rows = db.AccessDb.clearCardAssignment(uid);
+                        } catch (Exception ex) {
+                            final String msg = ex.getMessage() == null ? ex.toString() : ex.getMessage();
+                            Platform.runLater(() -> setBannerWarn(banner,
+                                    "Card erased, but DB update failed: " + msg
+                                            + "\nYou may need to clear the assignment manually."));
+                            return;
+                        }
+
+                        // 4) Success banner
+                        final int rowsFinal = rows;
+                        Platform.runLater(() -> {
+                            if (rowsFinal > 0) {
+                                setBannerSuccess(banner, "✅ Erase complete. Card unassigned and status set to F.");
+                            } else {
+                                setBannerSuccess(banner,
+                                        "✅ Erase complete. (No matching participant had this CardUID.)");
+                            }
+                        });
+
                     } finally {
                         setNfcBusy(false);
                         Platform.runLater(() -> {
@@ -529,7 +576,8 @@ public class EntryForm {
     }
 
     // ---------- Batch UI ----------
-    public static Parent createBatch(BiConsumer<Map<String, String>, Runnable> onSave,
+    public static Parent createBatch(
+            BiConsumer<Map<String, String>, Consumer<Boolean>> onSave,
             List<Map<String, String>> batchRows) {
 
         BorderPane root = new BorderPane();
@@ -650,7 +698,6 @@ public class EntryForm {
             phoneNumber.setText(pick.apply(cur, "phoneNumber"));
             bsgState.setText(pick.apply(cur, "bsgState"));
 
-            // prefer canonical (memberTyp/unitNam). Accept memberType/unitName as fallback.
             String mt = pick.apply(cur, "memberTyp");
             if (mt.isEmpty())
                 mt = pick.apply(cur, "memberType");
@@ -665,7 +712,6 @@ public class EntryForm {
             if (!r.isEmpty())
                 rank_or_section.setValue(r);
 
-            // accept both dataOfBirth and dateOfBirth
             String dob = pick.apply(cur, "dataOfBirth");
             if (dob.isEmpty())
                 dob = pick.apply(cur, "dateOfBirth");
@@ -690,8 +736,8 @@ public class EntryForm {
             stopBtn.setDisable(true);
         } else {
             fillCurrent.run();
-            status.setText(
-                    "Ready for record " + (index[0] + 1) + " / " + total + " — Present card and click Write & Next.");
+            status.setText("Ready for record " + (index[0] + 1) + " / " + total +
+                    " — Present card and click Write & Next.");
         }
 
         writeNextBtn.setOnAction(evt -> {
@@ -721,9 +767,9 @@ public class EntryForm {
                 un = pick.apply(cur, "unitName");
 
             String rk = pick.apply(cur, "rank_or_section");
-            String dob = pick.apply(cur, "dataOfBirth"); // canonical
+            String dob = pick.apply(cur, "dataOfBirth");
             if (dob.isEmpty())
-                dob = pick.apply(cur, "dateOfBirth"); // fallback
+                dob = pick.apply(cur, "dateOfBirth");
             String ag = pick.apply(cur, "age");
 
             data.put("FullName", fn);
@@ -742,40 +788,48 @@ public class EntryForm {
             String csv = String.join(",", Arrays.asList(fn, bs, pt, bd, em, ph, st, mt, un, rk, dob, ag));
             data.put("__CSV__", csv);
 
+            // Disable actions during write
             writeNextBtn.setDisable(true);
             skipBtn.setDisable(true);
             stopBtn.setDisable(true);
             status.setText("Writing record " + (index[0] + 1) + " / " + total + " — present card now...");
 
-            Runnable done = () -> Platform.runLater(() -> {
-                index[0]++;
-                if (!running[0] || index[0] >= total) {
-                    status.setText("Batch finished. Processed " + Math.min(total, index[0]) + " rows.");
-                    writeNextBtn.setDisable(true);
-                    skipBtn.setDisable(true);
-                    stopBtn.setDisable(true);
-                } else {
+            // NEW: success/failure finisher
+            Consumer<Boolean> finish = success -> Platform.runLater(() -> {
+                if (success) {
+                    index[0]++;
+                    if (!running[0] || index[0] >= total) {
+                        status.setText("Batch finished. Processed " + Math.min(total, index[0]) + " rows.");
+                        writeNextBtn.setDisable(true);
+                        skipBtn.setDisable(true);
+                        stopBtn.setDisable(true);
+                        return;
+                    }
                     fillCurrent.run();
-                    writeNextBtn.setDisable(false);
-                    skipBtn.setDisable(false);
-                    stopBtn.setDisable(false);
                     status.setText("Ready for record " + (index[0] + 1) + " / " + total
                             + " — Present card and click Write & Next.");
+                } else {
+                    // stay on same record
+                    status.setText("Write failed. Present the card again and click Write & Next.");
                 }
+                // Re-enable controls for next action (both cases)
+                writeNextBtn.setDisable(false);
+                skipBtn.setDisable(false);
+                stopBtn.setDisable(false);
             });
 
             try {
-                if (onSave != null)
-                    onSave.accept(data, done);
-                else
-                    done.run();
+                if (onSave != null) {
+                    onSave.accept(data, finish);
+                } else {
+                    // No handler → treat as success to allow stepping through
+                    finish.accept(true);
+                }
             } catch (Exception ex) {
-                Platform.runLater(() -> {
-                    status.setText("Write failed: " + ex.getMessage());
-                    writeNextBtn.setDisable(false);
-                    skipBtn.setDisable(false);
-                    stopBtn.setDisable(false);
-                });
+                status.setText("Write failed: " + ex.getMessage());
+                writeNextBtn.setDisable(false);
+                skipBtn.setDisable(false);
+                stopBtn.setDisable(false);
             }
         });
 
@@ -814,4 +868,5 @@ public class EntryForm {
         }
         return root;
     }
+
 }

@@ -1,5 +1,3 @@
-## Writing works absolutely fine now
+## Writing works absolutely fine now, erase works correctly
+## Attendance works fine but need to add data handling and db
 ## Logo add krna hai
-## Only error in erasing when status inside access doesnt turn F
-## A separate app for attendance is needed anyways
-## Information and attendance doesnt work up to mark
