@@ -86,28 +86,22 @@ public class AttendancePage {
             String timeStr = timeFmt.format(nowTime);
 
             // read location.txt (best-effort) from current working directory
-            String location = "Room X";
+            String location = "";
             try {
-                Path p = Paths.get("src/main/resources/location.txt");
-                if (Files.exists(p)) {
-                    String raw = Files.readString(p).trim();
-                    if (!raw.isEmpty())
-                        location = raw;
-                }
+                location = helper.Res.readText("/db/location.txt");
+                if (location.isEmpty())
+                    location = "Room X";
             } catch (Exception ex) {
                 location = "(error reading location)";
             }
 
             String nameFromCard = extractName(rr);
 
-            String event_name = "Event X";
+            String event_name = "";
             try {
-                Path p = Paths.get("src/main/resources/event.txt");
-                if (Files.exists(p)) {
-                    String raw = Files.readString(p).trim();
-                    if (!raw.isEmpty())
-                        event_name = raw;
-                }
+                event_name = helper.Res.readText("/db/event.txt");
+                if (event_name.isEmpty())
+                    event_name = "Event X";
             } catch (Exception ex) {
                 event_name = "(error reading event name)";
             }

@@ -1,3 +1,4 @@
+helper\Res.class
 nfc\SmartMifareWriter$BlockAuth.class
 ui\EntryForm.class
 util\CsvReader.class

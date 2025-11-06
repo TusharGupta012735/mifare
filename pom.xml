@@ -12,19 +12,15 @@
     <maven.compiler.release>21</maven.compiler.release>
     <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
 
-    <!-- JavaFX -->
     <javafx.version>21.0.5</javafx.version>
-    <javafx.platform>win</javafx.platform> <!-- win | mac | linux -->
+    <javafx.platform>win</javafx.platform>
 
-    <!-- Your JavaFX main -->
     <main.class>util.Main</main.class>
-
-    <!-- DB -->
     <ucanaccess.version>5.0.1</ucanaccess.version>
   </properties>
 
   <dependencies>
-    <!-- JavaFX: add/remove modules as needed -->
+    <!-- JavaFX as platform-specific JARs (classpath) -->
     <dependency>
       <groupId>org.openjfx</groupId>
       <artifactId>javafx-controls</artifactId>
@@ -38,23 +34,24 @@
       <classifier>${javafx.platform}</classifier>
     </dependency>
 
-    <!-- UCanAccess (brings jackcess, hsqldb, commons-*) -->
+    <!-- UCanAccess -->
     <dependency>
       <groupId>net.sf.ucanaccess</groupId>
       <artifactId>ucanaccess</artifactId>
       <version>${ucanaccess.version}</version>
     </dependency>
 
-     <dependency>
-    <groupId>org.apache.poi</groupId>
-    <artifactId>poi-ooxml</artifactId>
-    <version>5.2.5</version>
-  </dependency>
+    <!-- Apache POI -->
+    <dependency>
+      <groupId>org.apache.poi</groupId>
+      <artifactId>poi-ooxml</artifactId>
+      <version>5.2.5</version>
+    </dependency>
   </dependencies>
 
   <build>
     <plugins>
-      <!-- Java 21 -->
+      <!-- Compile -->
       <plugin>
         <artifactId>maven-compiler-plugin</artifactId>
         <version>3.11.0</version>
@@ -63,7 +60,7 @@
         </configuration>
       </plugin>
 
-      <!-- Dev run: mvn javafx:run -Pwin -->
+      <!-- Dev run -->
       <plugin>
         <groupId>org.openjfx</groupId>
         <artifactId>javafx-maven-plugin</artifactId>
@@ -73,7 +70,7 @@
         </configuration>
       </plugin>
 
-      <!-- FAT/UBER JAR (single runnable jar) -->
+      <!-- Fat JAR (classpath app) -->
       <plugin>
         <groupId>org.apache.maven.plugins</groupId>
         <artifactId>maven-assembly-plugin</artifactId>
@@ -82,7 +79,6 @@
           <descriptorRefs>
             <descriptorRef>jar-with-dependencies</descriptorRef>
           </descriptorRefs>
-          <finalName>${project.artifactId}</finalName>
           <archive>
             <manifest>
               <mainClass>${main.class}</mainClass>
@@ -93,67 +89,68 @@
           <execution>
             <id>make-assembly</id>
             <phase>package</phase>
-            <goals>
-              <goal>single</goal>
-            </goals>
+            <goals><goal>single</goal></goals>
+          </execution>
+        </executions>
+      </plugin>
+
+      <!-- jpackage (no JavaFX modules; classpath launch) -->
+      <plugin>
+        <groupId>org.panteleyev</groupId>
+        <artifactId>jpackage-maven-plugin</artifactId>
+        <version>1.7.1</version>
+        <executions>
+          <execution>
+            <id>create-installer</id>
+            <phase>package</phase>
+            <goals><goal>jpackage</goal></goals>
+            <configuration>
+              <name>AttendanceApp</name>
+              <appVersion>${project.version}</appVersion>
+              <vendor>Your Company</vendor>
+
+              <!-- Your fat JAR name is versioned -->
+              <mainJar>${project.artifactId}-${project.version}-jar-with-dependencies.jar</mainJar>
+              <mainClass>${main.class}</mainClass>
+
+              <input>${project.build.directory}</input>
+              <destination>${project.build.directory}/dist</destination>
+
+              <type>MSI</type>
+
+              <!-- JVM args helpful for JavaFX CSS reflection on classpath -->
+              <jvmArgs>
+                <jvmArg>--add-opens=javafx.graphics/com.sun.javafx.css=ALL-UNNAMED</jvmArg>
+                <jvmArg>--add-opens=javafx.graphics/javafx.css=ALL-UNNAMED</jvmArg>
+              </jvmArgs>
+
+              <!-- include compiled resources as loose files if needed -->
+              <resourceDir>${project.build.outputDirectory}</resourceDir>
+
+              <!-- Windows options -->
+              <winMenu>true</winMenu>
+              <winShortcut>true</winShortcut>
+              <winDirChooser>true</winDirChooser>
+              <winConsole>false</winConsole>
+            </configuration>
           </execution>
         </executions>
       </plugin>
     </plugins>
+
+    <resources>
+      <resource>
+        <directory>src/main/resources</directory>
+        <filtering>false</filtering>
+      </resource>
+    </resources>
   </build>
 
-  <!-- switch platform easily: -Pwin / -Pmac / -Plinux -->
   <profiles>
     <profile>
       <id>win</id>
-      <properties>
-        <javafx.platform>win</javafx.platform>
-      </properties>
-    </profile>
-    <profile>
-      <id>mac</id>
-      <properties>
-        <javafx.platform>mac</javafx.platform>
-      </properties>
-    </profile>
-    <profile>
-      <id>linux</id>
-      <properties>
-        <javafx.platform>linux</javafx.platform>
-      </properties>
-    </profile>
-
-    <!-- Optional: jpackage profile to produce an installer/app image -->
-    <profile>
-      <id>pack</id>
-      <build>
-        <plugins>
-          <plugin>
-            <groupId>org.panteleyev</groupId>
-            <artifactId>jpackage-maven-plugin</artifactId>
-            <version>1.7.5</version>
-            <configuration>
-              <input>${project.build.directory}</input>
-              <dest>${project.build.directory}/dist</dest>
-              <name>AttendanceApp</name>
-              <mainJar>${project.artifactId}-jar-with-dependencies.jar</mainJar>
-              <type>app-image</type>
-              <!-- optional extras:
-              <icon>src/main/resources/icon.ico</icon>
-              <winMenu>true</winMenu>
-              <winShortcut>true</winShortcut>
-              -->
-            </configuration>
-            <executions>
-              <execution>
-                <goals>
-                  <goal>jpackage</goal>
-                </goals>
-              </execution>
-            </executions>
-          </plugin>
-        </plugins>
-      </build>
+      <activation><os><family>Windows</family></os></activation>
+      <properties><javafx.platform>win</javafx.platform></properties>
     </profile>
   </profiles>
 </project>
