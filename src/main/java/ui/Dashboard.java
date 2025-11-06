@@ -18,6 +18,7 @@ import javafx.scene.layout.*;
 import javafx.scene.text.Text;
 import javafx.util.Duration;
 import javafx.scene.Node;
+import javafx.scene.paint.Color;
 
 public class Dashboard extends BorderPane {
 
@@ -25,7 +26,11 @@ public class Dashboard extends BorderPane {
     private volatile Thread attendancePollerThread = null;
     private final AtomicBoolean attendancePollerRunning = new AtomicBoolean(false);
     private final AtomicBoolean onAttendanceTab = new AtomicBoolean(false);
-    private volatile String lastSeenUid = null;
+
+    // Simple attendance view controls we update from the poller
+    private Label attendanceHeadline; // big prompt ("Tap your card", "Card read", etc)
+    private Label attendanceUid; // shows UID
+    private VBox attendanceView; // root node for attendance page
 
     // Make inputs/headings larger & cleaner without touching EntryForm code
     private void prettifyForm(Parent root) {
@@ -139,7 +144,6 @@ public class Dashboard extends BorderPane {
         // --- Buttons ---
         Button attendanceBtn = new Button("Attendance");
         Button entryFormBtn = new Button("Entry Form");
-        Button infoBtn = new Button("Information");
         Button batchBtn = new Button("Batch (Filter)");
         Button reportBtn = new Button("Report");
         Button importBtn = new Button("Import Excel"); // NEW
@@ -167,27 +171,26 @@ public class Dashboard extends BorderPane {
                     -fx-effect: dropshadow(gaussian, rgba(0,0,0,0.3), 6, 0, 0, 2);
                 """;
 
-        for (Button btn : new Button[] { attendanceBtn, entryFormBtn, batchBtn, reportBtn, infoBtn, importBtn }) {
+        for (Button btn : new Button[] { attendanceBtn, entryFormBtn, batchBtn, reportBtn, importBtn }) {
             btn.setStyle(btnStyle);
             btn.setOnMouseEntered(e -> btn.setStyle(hoverStyle));
             btn.setOnMouseExited(e -> btn.setStyle(btnStyle));
         }
 
         // --- Navbar Layout (added Import Excel at the end) ---
-        HBox navBar = new HBox(20, attendanceBtn, entryFormBtn, batchBtn, reportBtn, infoBtn, importBtn);
+        HBox navBar = new HBox(20, attendanceBtn, entryFormBtn, batchBtn, reportBtn, importBtn);
         navBar.setPadding(new Insets(15, 20, 15, 20));
         navBar.setStyle(
                 "-fx-background-color: linear-gradient(to bottom, #1565c0, #0d47a1); -fx-alignment: center; -fx-effect: dropshadow(gaussian, rgba(0,0,0,0.2), 8, 0, 0, 2);");
 
-        for (Button btn : new Button[] { attendanceBtn, entryFormBtn, batchBtn, reportBtn, infoBtn, importBtn }) {
+        for (Button btn : new Button[] { attendanceBtn, entryFormBtn, batchBtn, reportBtn, importBtn }) {
             HBox.setHgrow(btn, Priority.ALWAYS);
             btn.setMaxWidth(Double.MAX_VALUE);
         }
 
-        // --- Default Content ---
+        // --- Default Content: ATTENDANCE ---
         contentArea.setPadding(new Insets(20));
-        setContent(AttendancePage.create());
-        // >>> Mark as on Attendance initially and start poller
+        setContent(createAttendanceView());
         onAttendanceTab.set(true);
         startAttendancePoller();
 
@@ -197,14 +200,12 @@ public class Dashboard extends BorderPane {
 
         // --- Actions ---
         attendanceBtn.setOnAction(e -> {
-            // >>> Switch to Attendance: ensure ONLY this tab runs the poller
             onAttendanceTab.set(true);
-            setContent(AttendancePage.create()); // safe to refresh view
+            setContent(createAttendanceView()); // rebuild attendance view
             startAttendancePoller();
         });
 
         entryFormBtn.setOnAction(e -> {
-            // >>> Leaving Attendance: stop poller
             leaveAttendance();
             Parent form = EntryForm.create((formData, done) -> {
                 new Thread(() -> {
@@ -285,86 +286,8 @@ public class Dashboard extends BorderPane {
             setContent(form);
         });
 
-        infoBtn.setOnAction(e -> {
-            // >>> Leaving Attendance: stop poller
-            leaveAttendance();
-
-            Label waitLbl = new Label("📡 Present card to read info...");
-            waitLbl.setStyle("""
-                        -fx-font-size: 24px;
-                        -fx-font-weight: bold;
-                        -fx-text-fill: #1565C0;
-                        -fx-background-color: #E3F2FD;
-                        -fx-padding: 20 30;
-                        -fx-background-radius: 10;
-                        -fx-border-color: #1565C0;
-                        -fx-border-radius: 10;
-                        -fx-border-width: 2;
-                        -fx-effect: dropshadow(gaussian, rgba(0,0,0,0.1), 10, 0, 0, 2);
-                    """);
-            setContent(new StackPane(waitLbl));
-
-            new Thread(() -> {
-                EntryForm.setNfcBusy(true);
-                SmartMifareReader.ReadResult rr = null;
-                try {
-                    rr = SmartMifareReader.readUIDWithData(10_000);
-                } catch (Exception ex) {
-                    /* ignore */ } finally {
-                    EntryForm.setNfcBusy(false);
-                }
-
-                SmartMifareReader.ReadResult finalRR = rr;
-                Platform.runLater(() -> {
-                    if (finalRR == null || finalRR.uid == null) {
-                        Label err = new Label("❌ No card read (timed out or error).");
-                        err.setStyle("""
-                                    -fx-font-size: 24px;
-                                    -fx-font-weight: bold;
-                                    -fx-text-fill: #C62828;
-                                    -fx-background-color: #FFEBEE;
-                                    -fx-padding: 20 30;
-                                    -fx-background-radius: 10;
-                                    -fx-border-color: #C62828;
-                                    -fx-border-radius: 10;
-                                    -fx-border-width: 2;
-                                    -fx-effect: dropshadow(gaussian, rgba(0,0,0,0.1), 10, 0, 0, 2);
-                                """);
-                        setContent(new StackPane(err));
-                        return;
-                    }
-                    Map<String, String> map = new LinkedHashMap<>();
-                    map.put("UID", finalRR.uid);
-                    map.put("Readable data",
-                            (finalRR.data == null || finalRR.data.trim().isEmpty()) ? "(none)" : finalRR.data.trim());
-
-                    GridPane grid = new GridPane();
-                    grid.setVgap(12);
-                    grid.setHgap(20);
-                    grid.setPadding(new Insets(20));
-                    grid.setStyle("""
-                                -fx-background-color: white;
-                                -fx-background-radius: 12;
-                                -fx-border-radius: 12;
-                                -fx-border-color: #E0E0E0;
-                                -fx-effect: dropshadow(gaussian, rgba(0,0,0,0.08), 12, 0, 0, 2);
-                            """);
-                    int row = 0;
-                    for (Map.Entry<String, String> en : map.entrySet()) {
-                        grid.add(new Label(en.getKey() + ":"), 0, row);
-                        grid.add(new Label(en.getValue()), 1, row);
-                        row++;
-                    }
-                    VBox container = new VBox(16, new Label("Card Information"), grid);
-                    container.setPadding(new Insets(20));
-                    setContent(container);
-                });
-            }, "info-read-thread").start();
-        });
-
         // Batch (Filter)
         batchBtn.setOnAction(e -> {
-            // >>> Leaving Attendance: stop poller
             leaveAttendance();
 
             List<Map<String, String>> rows = BatchFilterDialog.showAndFetch(
@@ -386,7 +309,6 @@ public class Dashboard extends BorderPane {
 
             java.util.concurrent.atomic.AtomicInteger processed = new java.util.concurrent.atomic.AtomicInteger(0);
 
-            // SAME editable form UI
             Parent batch = EntryForm.createBatch((formData, done) -> {
                 new Thread(() -> {
                     try {
@@ -445,14 +367,12 @@ public class Dashboard extends BorderPane {
 
         // Report placeholder
         reportBtn.setOnAction(e -> {
-            // >>> Leaving Attendance: stop poller
             leaveAttendance();
             setContent("📊 Report Page");
         });
 
         // NEW: Import Excel wiring
         importBtn.setOnAction(e -> {
-            // >>> Leaving Attendance: stop poller
             leaveAttendance();
 
             int imported = ExcelImportDialog.show(
@@ -488,64 +408,138 @@ public class Dashboard extends BorderPane {
         setContent(newText);
     }
 
+    // -------- Attendance UI (inline, replaces AttendancePage.create()) --------
+    private Parent createAttendanceView() {
+        attendanceHeadline = new Label("Tap your card");
+        attendanceHeadline.setStyle("""
+                        -fx-font-size: 28px;
+                        -fx-font-weight: 900;
+                        -fx-text-fill: #0D47A1;
+                """);
+
+        attendanceUid = new Label("");
+        attendanceUid.setStyle("""
+                        -fx-font-size: 20px;
+                        -fx-font-weight: 700;
+                        -fx-text-fill: #2E7D32;
+                """);
+
+        Label sub = new Label("Hold for a moment, then remove the card to continue.");
+        sub.setStyle("-fx-font-size: 13px; -fx-text-fill: #455A64;");
+
+        VBox box = new VBox(12, attendanceHeadline, attendanceUid, sub);
+        box.setAlignment(Pos.CENTER);
+        box.setPadding(new Insets(30));
+        box.setStyle("""
+                        -fx-background-color: white;
+                        -fx-background-radius: 12;
+                        -fx-effect: dropshadow(gaussian, rgba(0,0,0,0.06), 16, 0, 0, 4);
+                """);
+
+        StackPane wrapper = new StackPane(box);
+        wrapper.setPadding(new Insets(10));
+        wrapper.setStyle("-fx-background-color: #ECEFF1;");
+
+        attendanceView = new VBox(wrapper);
+        attendanceView.setFillWidth(true);
+
+        // Reset initial prompt
+        setAttendancePrompt();
+
+        return attendanceView;
+    }
+
+    private void setAttendancePrompt() {
+        Platform.runLater(() -> {
+            if (attendanceHeadline != null) {
+                attendanceHeadline.setText("Tap your card");
+                attendanceHeadline.setTextFill(Color.web("#0D47A1"));
+            }
+            if (attendanceUid != null)
+                attendanceUid.setText("");
+        });
+    }
+
+    private void showUid(String uid) {
+        Platform.runLater(() -> {
+            if (attendanceHeadline != null) {
+                attendanceHeadline.setText("Card detected");
+                attendanceHeadline.setTextFill(Color.web("#2E7D32"));
+            }
+            if (attendanceUid != null)
+                attendanceUid.setText("UID: " + uid);
+        });
+    }
+
+    private void showRemovePrompt() {
+        Platform.runLater(() -> {
+            if (attendanceHeadline != null) {
+                attendanceHeadline.setText("Remove card…");
+                attendanceHeadline.setTextFill(Color.web("#E65100"));
+            }
+        });
+    }
+
     // >>> Attendance poller control
 
     /**
      * Start (or restart) the attendance poller. Safe to call repeatedly.
-     * Polls the reader with a short timeout and watches for a transition:
-     * CARD PRESENT -> CARD ABSENT. On removal, refresh Attendance UI so it asks to
-     * tap again.
+     * Waits indefinitely for a card; when present, shows UID, then waits until card
+     * is removed and returns to "Tap your card".
      */
+    // Add near the top of Dashboard (class fields) or as local finals inside
+    // startAttendancePoller():
+    private static final int PROBE_TIMEOUT_MS = 200; // each probe wait
+    private static final int ABSENT_CONFIRM_MS = 1000; // must see NULL for this long to consider removed
+
     private void startAttendancePoller() {
-        // If already running, keep it; otherwise start fresh
+
         if (attendancePollerRunning.get())
             return;
 
         attendancePollerRunning.set(true);
         attendancePollerThread = new Thread(() -> {
             Thread.currentThread().setPriority(Thread.MIN_PRIORITY);
-            final int READ_TIMEOUT_MS = 350; // short, non-blocking-ish
-            final int IDLE_SLEEP_MS = 150; // be gentle on CPU
 
-            while (attendancePollerRunning.get()) {
-                // Run only while we're actually on the Attendance tab
-                if (!onAttendanceTab.get())
-                    break;
-
-                boolean hadCard = (lastSeenUid != null);
+            while (attendancePollerRunning.get() && onAttendanceTab.get()) {
+                // 1) Wait indefinitely for a card
                 SmartMifareReader.ReadResult rr = null;
                 try {
-                    // Non-intrusive short read; exceptions are swallowed
-                    rr = SmartMifareReader.readUIDWithData(READ_TIMEOUT_MS);
+                    rr = SmartMifareReader.readUIDWithData(0); // infinite wait
                 } catch (Throwable t) {
-                    // ignore to keep the loop resilient
+                    // swallow & keep looping
                 }
+
+                if (!attendancePollerRunning.get() || !onAttendanceTab.get())
+                    break;
 
                 if (rr != null && rr.uid != null && !rr.uid.isBlank()) {
-                    // Card currently present
-                    lastSeenUid = rr.uid;
+                    // Show UID
+                    showUid(rr.uid);
+
+                    // After: showUid(rr.uid);
+                    showRemovePrompt();
+
+                    // Block here until the reader confirms the card is absent.
+                    // This avoids debounce glitches and polling races completely.
+                    boolean absentConfirmed = SmartMifareReader.waitForCardAbsent(0); // 0 = wait forever
+
+                    // If the poller is still active and we're on the Attendance tab, reset the UI
+                    if (attendancePollerRunning.get() && onAttendanceTab.get() && absentConfirmed) {
+                        setAttendancePrompt();
+                    }
+
                 } else {
-                    // No card detected in this slice
-                    if (hadCard) {
-                        // Transition: card was present and now absent -> refresh view & ask to tap
-                        // again
-                        lastSeenUid = null;
-                        Platform.runLater(() -> {
-                            if (onAttendanceTab.get()) {
-                                // Recreate the Attendance page (lightweight) to show the prompt again
-                                setContent(AttendancePage.create());
-                            }
-                        });
+                    // timed out or error (shouldn't happen with 0), brief rest to avoid tight loop
+                    try {
+                        Thread.sleep(150);
+                    } catch (InterruptedException ex) {
+                        Thread.currentThread().interrupt();
+                        break;
                     }
                 }
-
-                try {
-                    Thread.sleep(IDLE_SLEEP_MS);
-                } catch (InterruptedException ie) {
-                    Thread.currentThread().interrupt();
-                    break;
-                }
             }
+
             attendancePollerRunning.set(false);
         }, "attendance-poller");
         attendancePollerThread.setDaemon(true);
@@ -563,12 +557,10 @@ public class Dashboard extends BorderPane {
     }
 
     private void stopAttendancePoller() {
-        if (!attendancePollerRunning.get()) {
-            lastSeenUid = null;
+        if (!attendancePollerRunning.get())
             return;
-        }
+
         attendancePollerRunning.set(false);
-        lastSeenUid = null;
         Thread t = attendancePollerThread;
         attendancePollerThread = null;
         if (t != null) {

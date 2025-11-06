@@ -7,6 +7,28 @@ import java.util.concurrent.ConcurrentHashMap;
 
 public class SmartMifareReader {
 
+    public static boolean waitForCardAbsent(long timeoutMs) {
+        try {
+            TerminalFactory factory = TerminalFactory.getDefault();
+            List<CardTerminal> terminals = factory.terminals().list();
+            if (terminals == null || terminals.isEmpty()) {
+                System.err.println("SmartMifareReader: no NFC reader detected (waitForCardAbsent).");
+                return false;
+            }
+            CardTerminal terminal = terminals.get(0);
+
+            if (timeoutMs <= 0) {
+                terminal.waitForCardAbsent(0); // block indefinitely
+                return true;
+            } else {
+                return terminal.waitForCardAbsent(timeoutMs);
+            }
+        } catch (Exception e) {
+            System.err.println("SmartMifareReader waitForCardAbsent error: " + e.getMessage());
+            return false;
+        }
+    }
+
     // Simple debounce map to avoid immediate duplicates when calling repeatedly
     private static final ConcurrentHashMap<String, Long> lastSeen = new ConcurrentHashMap<>();
     private static final long DEBOUNCE_MS = 500; // ignore duplicates within 500ms
@@ -18,6 +40,7 @@ public class SmartMifareReader {
     public static String readUID() {
         return readUID(20_000);
     }
+
     /*
      * Read UID, blocking up to timeoutMs milliseconds. Returns UID (hex) or null.
      */
@@ -25,6 +48,7 @@ public class SmartMifareReader {
         ReadResult r = readUIDWithData(timeoutMs);
         return (r == null) ? null : r.uid;
     }
+
     /*
      * Read UID + attempt to read printable data. Default timeout 20s. Returns
      * ReadResult or null on timeout/error.
@@ -32,6 +56,7 @@ public class SmartMifareReader {
     public static ReadResult readUIDWithData() {
         return readUIDWithData(20_000);
     }
+
     /*
      * Read UID and some readable data. Blocks up to timeoutMs milliseconds waiting
      * for a card.
