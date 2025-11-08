@@ -29,6 +29,73 @@ public class Dashboard extends BorderPane {
 
     // Reuse these whenever the Attendance tab is (re)loaded
     private static final String LOC_EVENT_PATH = "src/main/resources/location.txt";
+
+    private static final String SEED_LOCATION_RESOURCE = "/location.txt";
+    private static final String LOCATION_FILENAME = "location.txt";
+
+    private java.nio.file.Path resolveUserDataDir() {
+        try {
+            java.nio.file.Path dbPath = db.AccessDb.getActiveDbPath(); // returns Path to bsd.accdb inside user data dir
+            if (dbPath != null) {
+                java.nio.file.Path parent = dbPath.getParent();
+                if (parent != null)
+                    return parent;
+            }
+        } catch (Exception ignore) {
+            // ignore and fall through to fallback
+        }
+        // fallback cross-platform default (same logic AccessDb uses)
+        String os = System.getProperty("os.name", "").toLowerCase(java.util.Locale.ROOT);
+        if (os.contains("win")) {
+            String localAppData = System.getenv("LOCALAPPDATA");
+            java.nio.file.Path base = (localAppData != null)
+                    ? java.nio.file.Paths.get(localAppData)
+                    : java.nio.file.Paths.get(System.getProperty("user.home"), "AppData", "Local");
+            return base.resolve("AttendanceApp").resolve("data");
+        } else if (os.contains("mac")) {
+            return java.nio.file.Paths.get(System.getProperty("user.home"), "Library", "Application Support",
+                    "AttendanceApp", "data");
+        } else {
+            return java.nio.file.Paths.get(System.getProperty("user.home"), ".local", "share", "AttendanceApp", "data");
+        }
+    }
+
+    /**
+     * Ensure a writable location.txt exists in the user data dir. If missing, copy
+     * the bundled classpath seed resource (SEED_LOCATION_RESOURCE) to it.
+     * Returns the filesystem path to the writable file.
+     */
+    private java.nio.file.Path ensureWritableLocationFilePresent() {
+        java.nio.file.Path dataDir = resolveUserDataDir();
+        try {
+            java.nio.file.Files.createDirectories(dataDir);
+        } catch (Exception ex) {
+            System.err.println("Failed to create data dir: " + ex);
+        }
+        java.nio.file.Path writable = dataDir.resolve(LOCATION_FILENAME);
+
+        if (!java.nio.file.Files.exists(writable)) {
+            // try to copy bundled resource -> writable
+            try (java.io.InputStream in = getClass().getResourceAsStream(SEED_LOCATION_RESOURCE)) {
+                if (in != null) {
+                    try (java.io.OutputStream out = java.nio.file.Files.newOutputStream(writable,
+                            java.nio.file.StandardOpenOption.CREATE_NEW)) {
+                        in.transferTo(out);
+                        System.out.println("Copied seed location.txt to: " + writable);
+                    }
+                } else {
+                    // If seed not present in JAR, create a harmless default file
+                    String defaultContent = "Default Location\nDefault Event\n";
+                    java.nio.file.Files.writeString(writable, defaultContent, java.nio.charset.StandardCharsets.UTF_8);
+                    System.out.println("Wrote default location.txt to: " + writable);
+                }
+            } catch (Exception ex) {
+                System.err.println("Failed to copy seed location.txt -> " + writable + " : " + ex);
+            }
+        }
+        return writable;
+    }
+
     private static final boolean LOC_EVENT_CLASSPATH = false;
     private static final String LOGO_PATH = "src/main/resources/logo-removebg-preview.png";
 
@@ -195,7 +262,8 @@ public class Dashboard extends BorderPane {
         attendanceView = new AttendanceView();
         setContent(attendanceView.getView());
         attendanceView.setLogo(LOGO_PATH);
-        attendanceView.loadLocationEventFromFile(LOC_EVENT_PATH, LOC_EVENT_CLASSPATH);
+        java.nio.file.Path writableLocInit = ensureWritableLocationFilePresent();
+        attendanceView.loadLocationEventFromFile(writableLocInit.toString(), false);
 
         onAttendanceTab.set(true);
         startAttendancePoller();
@@ -209,7 +277,8 @@ public class Dashboard extends BorderPane {
             onAttendanceTab.set(true);
             attendanceView = new AttendanceView(); // create new instance
             setContent(attendanceView.getView());
-            attendanceView.loadLocationEventFromFile(LOC_EVENT_PATH, LOC_EVENT_CLASSPATH);
+            java.nio.file.Path writableLocReload = ensureWritableLocationFilePresent();
+            attendanceView.loadLocationEventFromFile(writableLocReload.toString(), false);
             startAttendancePoller();
         });
 
