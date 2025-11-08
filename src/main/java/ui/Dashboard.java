@@ -190,6 +190,8 @@ public class Dashboard extends BorderPane {
         attendanceView = new AttendanceView();
         setContent(attendanceView.getView());
         attendanceView.setLogo("src/main/resources/logo-removebg-preview.png");
+        attendanceView.loadLocationEventFromFile("src/main/resources/location.txt", false);
+
         onAttendanceTab.set(true);
         startAttendancePoller();
 
@@ -504,6 +506,7 @@ public class Dashboard extends BorderPane {
         newText.setStyle("-fx-font-size: 20px; -fx-fill: #212121; -fx-font-weight: 600;");
         setContent(newText);
     }
+
     private void setAttendancePrompt() {
         Platform.runLater(() -> {
             if (attendanceView != null) {
@@ -579,19 +582,71 @@ public class Dashboard extends BorderPane {
                     break;
 
                 if (rr != null && rr.uid != null && !rr.uid.isBlank()) {
-                    // Show UID
+                    // Show UID immediately in UI
                     showUid(rr.uid);
 
-                    // After: showUid(rr.uid);
-                    showRemovePrompt();
+                    // Let the view parse payload / show name/bsguid etc.
+                    if (attendanceView != null) {
+                        try {
+                            attendanceView.acceptReadResult(rr);
+                        } catch (Throwable t) {
+                            t.printStackTrace();
+                        }
+                    }
 
-                    // Block here until the reader confirms the card is absent.
-                    // This avoids debounce glitches and polling races completely.
+                    // --- BLOCKING DB write: insert into trans BEFORE accepting next card ---
+                    int inserted = 0;
+                    try {
+                        String loc = (attendanceView != null ? attendanceView.getLocationText() : "(unknown)");
+                        String ev = (attendanceView != null ? attendanceView.getEventText() : "(unknown)");
+                        try {
+                            inserted = db.AccessDb.insertTrans(rr.uid, loc, ev); // returns 1 on success
+                        } catch (Throwable dbEx) {
+                            dbEx.printStackTrace();
+                            inserted = 0;
+                        }
+                    } finally {
+                        // update headline with short message (no popup)
+                        if (inserted > 0) {
+                            Platform.runLater(() -> {
+                                if (attendanceView != null) {
+                                    attendanceView.getHeadline().setText("Attendance updated");
+                                    attendanceView.getHeadline().setStyle("""
+                                                -fx-font-size: 28px;
+                                                -fx-font-weight: 900;
+                                                -fx-text-fill: #2E7D32;
+                                            """);
+                                }
+                            });
+                        } else {
+                            Platform.runLater(() -> {
+                                if (attendanceView != null) {
+                                    attendanceView.getHeadline().setText("Card not registered");
+                                    attendanceView.getHeadline().setStyle("""
+                                                -fx-font-size: 28px;
+                                                -fx-font-weight: 900;
+                                                -fx-text-fill: #D32F2F;
+                                            """);
+                                }
+                            });
+                        }
+                    }
+
+                    // Prompt removal and block until absent (prevents processing next card)
+                    showRemovePrompt();
                     boolean absentConfirmed = SmartMifareReader.waitForCardAbsent(0); // 0 = wait forever
 
-                    // If the poller is still active and we're on the Attendance tab, reset the UI
+                    // Reset UI for next card while preserving location/event if your view holds
+                    // them
                     if (attendancePollerRunning.get() && onAttendanceTab.get() && absentConfirmed) {
                         setAttendancePrompt();
+                        if (attendanceView != null) {
+                            // clear transient fields (name/uid/date/time) but keep location/event
+                            try {
+                                attendanceView.clearDetails();
+                            } catch (Throwable ignored) {
+                            }
+                        }
                     }
 
                 } else {

@@ -16,14 +16,26 @@ import java.io.IOException;
 import java.time.LocalDate;
 import java.time.LocalTime;
 import java.time.format.DateTimeFormatter;
-import java.util.HashMap;
-import java.util.Map;
+import java.util.*;
+
+import nfc.SmartMifareReader;
 
 public class AttendanceView {
 
-    private static final double MAX_LOGO_WIDTH = 180; // cap logo width
+    private static final double MAX_LOGO_WIDTH = 200; // cap logo width
     private static final double LEFT_HEADING_WIDTH = 130; // width for heading cells in the details card
-    private static final String HEADING_BG_COLOR = "#0D47A1"; // blue used for headings
+    private static final String HEADING_BG_COLOR = "#1c56aeff"; // blue used for headings
+
+    private volatile String locationText = "(unknown)";
+    private volatile String eventText = "(unknown)";
+
+    // Scaling limits for dynamic typography
+    private static final double BASE_HEADING_FONT = 15.0;
+    private static final double BASE_VALUE_FONT = 16.0;
+    private static final double MIN_HEADING_FONT = 12.0;
+    private static final double MAX_HEADING_FONT = 24.0;
+    private static final double MIN_VALUE_FONT = 12.0;
+    private static final double MAX_VALUE_FONT = 22.0;
 
     // Top card controls
     private final Label headline;
@@ -42,10 +54,93 @@ public class AttendanceView {
     private final Label locationValue;
     private final Label eventValue;
 
+    // Keep references for dynamic font updates
+    private final List<Label> headingLabels = new ArrayList<>();
+    private final List<Label> valueLabels = new ArrayList<>();
+
     // Formatters
     private static final DateTimeFormatter DATE_FMT = DateTimeFormatter.ofPattern("yyyy-MM-dd");
     private static final DateTimeFormatter TIME_FMT = DateTimeFormatter.ofPattern("HH:mm:ss");
 
+    // ---------------- ReadResult handling ----------------
+    public void acceptReadResult(SmartMifareReader.ReadResult rr) {
+        if (rr == null) {
+            Platform.runLater(this::clearDetails);
+            return;
+        }
+
+        // 1) Update UID display immediately
+        final String uidText = (rr.uid == null || rr.uid.isBlank()) ? "(no uid)" : rr.uid;
+        Platform.runLater(() -> {
+            getUidLabel().setText("UID: " + uidText);
+        });
+
+        // 2) Try to extract a payload string from common ReadResult fields
+        String csv = null;
+
+        // direct known field: many ReadResult implementations expose 'data' or 'text'
+        try {
+            java.lang.reflect.Field f = rr.getClass().getField("data");
+            Object val = f.get(rr);
+            if (val != null)
+                csv = String.valueOf(val);
+        } catch (Throwable ignored) {
+        }
+
+        if ((csv == null || csv.isBlank())) {
+            try {
+                java.lang.reflect.Field f = rr.getClass().getField("text");
+                Object val = f.get(rr);
+                if (val != null)
+                    csv = String.valueOf(val);
+            } catch (Throwable ignored) {
+            }
+        }
+
+        // try getter methods
+        if ((csv == null || csv.isBlank())) {
+            try {
+                java.lang.reflect.Method m = rr.getClass().getMethod("getData");
+                Object val = m.invoke(rr);
+                if (val != null)
+                    csv = String.valueOf(val);
+            } catch (Throwable ignored) {
+            }
+        }
+        if ((csv == null || csv.isBlank())) {
+            try {
+                java.lang.reflect.Method m = rr.getClass().getMethod("getText");
+                Object val = m.invoke(rr);
+                if (val != null)
+                    csv = String.valueOf(val);
+            } catch (Throwable ignored) {
+            }
+        }
+
+        // last resort: toString()
+        if ((csv == null || csv.isBlank())) {
+            try {
+                csv = rr.toString();
+            } catch (Throwable ignored) {
+            }
+        }
+
+        // 3) If we got something that looks useful, parse it into fields
+        if (csv != null && !csv.isBlank()) {
+            // updateFromCardCsv already sets FullName, BSGUID, and date/time (it sets now)
+            updateFromCardCsv(csv);
+        } else {
+            // still update date/time even if we didn't get card payload
+            String nowDate = java.time.LocalDate.now().format(DateTimeFormatter.ofPattern("yyyy-MM-dd"));
+            String nowTime = java.time.LocalTime.now().format(DateTimeFormatter.ofPattern("HH:mm:ss"));
+            Platform.runLater(() -> {
+                setDate(nowDate);
+                setTime(nowTime);
+            });
+        }
+    }
+
+    // ---------------- Constructor / UI ----------------
     public AttendanceView() {
         // --- TOP: left text (headline, uid) --- (increased fonts)
         headline = new Label("Tap your card");
@@ -157,6 +252,11 @@ public class AttendanceView {
         root = new VBox(12, topCard, detailsCardWrap);
         root.setFillWidth(true);
         root.setPadding(new Insets(10));
+
+        // Hook dynamic font scaling to width
+        root.widthProperty().addListener((obs, oldW, newW) -> adjustFontSizes(newW.doubleValue()));
+        // initial sizing
+        adjustFontSizes(800); // reasonable default
     }
 
     private Label createHeadingLabel(String text) {
@@ -165,12 +265,14 @@ public class AttendanceView {
         l.setMaxWidth(LEFT_HEADING_WIDTH);
         l.setAlignment(Pos.CENTER_LEFT);
         l.setPadding(new Insets(10, 12, 10, 12));
+        // default font size via style; will be overridden by adjustFontSizes
         l.setStyle(String.format("""
                 -fx-background-color: %s;
                 -fx-text-fill: white;
                 -fx-font-weight: 900;
-                -fx-font-size: 15px;
-                """, HEADING_BG_COLOR));
+                -fx-font-size: %.1fpx;
+                """, HEADING_BG_COLOR, BASE_HEADING_FONT));
+        headingLabels.add(l);
         return l;
     }
 
@@ -179,11 +281,13 @@ public class AttendanceView {
         v.setWrapText(true);
         v.setAlignment(Pos.CENTER_LEFT);
         v.setPadding(new Insets(10, 12, 10, 12));
-        v.setStyle("""
+        // unbold values (removed font-weight: 700) and default font-size via
+        // BASE_VALUE_FONT
+        v.setStyle(String.format("""
                 -fx-text-fill: #263238;
-                -fx-font-size: 16px;
-                -fx-font-weight: 700;
-                """);
+                -fx-font-size: %.1fpx;
+                """, BASE_VALUE_FONT));
+        valueLabels.add(v);
         return v;
     }
 
@@ -268,6 +372,14 @@ public class AttendanceView {
                 parsedFullName = map.get("name");
             if (parsedBsguid == null && map.containsKey("id"))
                 parsedBsguid = map.get("id");
+
+            // Also support location/event embedded in card CSV (optional)
+            if (map.containsKey("location")) {
+                setLocation(map.get("location"));
+            }
+            if (map.containsKey("event")) {
+                setEvent(map.get("event"));
+            }
         }
 
         // Fallback: simple CSV positional parsing
@@ -279,6 +391,7 @@ public class AttendanceView {
             if (parts.length >= 2 && parsedBsguid == null) {
                 parsedBsguid = parts[1].trim();
             }
+            // if card CSV includes location/event in positions 3/4 we won't assume here
         }
 
         // Sanitize BSGUID (remove all whitespace)
@@ -317,6 +430,10 @@ public class AttendanceView {
                 fn = v;
             if ("bsguid".equals(k) || "id".equals(k) || "uid".equals(k))
                 id = v;
+            if ("location".equals(k))
+                setLocation(v);
+            if ("event".equals(k))
+                setEvent(v);
         }
         if (id != null)
             id = id.replaceAll("\\s+", "");
@@ -338,8 +455,10 @@ public class AttendanceView {
             bsguidValue.setText("(empty)");
             dateValue.setText("(--/--/----)");
             timeValue.setText("(--:--)");
-            locationValue.setText("(unknown)");
-            eventValue.setText("(unknown)");
+            // keep location/event intact if desired; earlier you asked to clear all —
+            // adjust as needed
+            locationValue.setText(locationValue.getText() == null ? "(unknown)" : locationValue.getText());
+            eventValue.setText(eventValue.getText() == null ? "(unknown)" : eventValue.getText());
         });
     }
 
@@ -361,22 +480,24 @@ public class AttendanceView {
     }
 
     public void setLocation(String text) {
-        Platform.runLater(() -> locationValue.setText(text == null || text.isBlank() ? "(unknown)" : text));
+        locationText = (text == null || text.isBlank()) ? "(unknown)" : text;
+        Platform.runLater(() -> locationValue.setText(locationText));
     }
 
     public void setEvent(String text) {
-        Platform.runLater(() -> eventValue.setText(text == null || text.isBlank() ? "(unknown)" : text));
+        eventText = (text == null || text.isBlank()) ? "(unknown)" : text;
+        Platform.runLater(() -> eventValue.setText(eventText));
+    }
+    
+    public String getLocationText() {
+        return locationText;
+    }
+    public String getEventText() {
+        return eventText;
     }
 
-    public void loadLocationEventFromFile(String filePath) {
-        if (filePath == null || filePath.isBlank()) {
-            setLocation(null);
-            setEvent(null);
-            return;
-        }
-
-        File f = new File(filePath);
-        if (!f.exists() || !f.isFile()) {
+    public void loadLocationEventFromFile(String path, boolean classpath) {
+        if (path == null || path.isBlank()) {
             setLocation(null);
             setEvent(null);
             return;
@@ -384,14 +505,101 @@ public class AttendanceView {
 
         String loc = null;
         String ev = null;
-        try (BufferedReader br = new BufferedReader(new FileReader(f))) {
-            loc = br.readLine();
-            ev = br.readLine();
-        } catch (IOException e) {
-            loc = null;
-            ev = null;
+
+        if (classpath) {
+            try (java.io.InputStream in = getClass().getResourceAsStream(path)) {
+                if (in == null) {
+                    // resource not found
+                    System.err.println("AttendanceView: resource not found: " + path);
+                } else {
+                    try (java.io.BufferedReader br = new java.io.BufferedReader(
+                            new java.io.InputStreamReader(in, java.nio.charset.StandardCharsets.UTF_8))) {
+                        // read first two non-empty lines
+                        String line;
+                        while ((line = br.readLine()) != null && (loc == null || ev == null)) {
+                            if (line == null)
+                                break;
+                            line = line.trim();
+                            if (line.isEmpty())
+                                continue;
+                            if (loc == null)
+                                loc = line;
+                            else if (ev == null)
+                                ev = line;
+                        }
+                    }
+                }
+            } catch (Exception ex) {
+                System.err.println("AttendanceView: failed to read classpath resource " + path + " : " + ex);
+            }
+        } else {
+            // load from normal filesystem path
+            java.io.File f = new java.io.File(path);
+            if (!f.exists() || !f.isFile()) {
+                System.err.println("AttendanceView: file not found: " + path);
+            } else {
+                try (java.io.BufferedReader br = new java.io.BufferedReader(new java.io.InputStreamReader(
+                        new java.io.FileInputStream(f), java.nio.charset.StandardCharsets.UTF_8))) {
+                    String line;
+                    while ((line = br.readLine()) != null && (loc == null || ev == null)) {
+                        if (line == null)
+                            break;
+                        line = line.trim();
+                        if (line.isEmpty())
+                            continue;
+                        if (loc == null)
+                            loc = line;
+                        else if (ev == null)
+                            ev = line;
+                    }
+                } catch (Exception ex) {
+                    System.err.println("AttendanceView: failed to read file " + path + " : " + ex);
+                }
+            }
         }
-        setLocation(loc);
-        setEvent(ev);
+
+        // apply results to UI (use default placeholders if missing)
+        final String finalLoc = (loc == null || loc.isBlank()) ? "(unknown)" : loc;
+        final String finalEv = (ev == null || ev.isBlank()) ? "(unknown)" : ev;
+
+        Platform.runLater(() -> {
+            setLocation(finalLoc);
+            setEvent(finalEv);
+        });
+    }
+
+    // ---------------- Dynamic font sizing ----------------
+    private void adjustFontSizes(double availableWidth) {
+        // Decide a scale base on a baseline width (600 is chosen as a nice breakpoint)
+        double baseWidth = 600.0;
+        double scale = Math.max(0.6, Math.min(1.6, availableWidth / baseWidth));
+
+        double headingSize = clamp(BASE_HEADING_FONT * scale, MIN_HEADING_FONT, MAX_HEADING_FONT);
+        double valueSize = clamp(BASE_VALUE_FONT * scale, MIN_VALUE_FONT, MAX_VALUE_FONT);
+
+        final String headingStyleTemplate = String.format(
+                "-fx-background-color: %s; -fx-text-fill: white; -fx-font-weight: 900; -fx-font-size: %.1fpx;",
+                HEADING_BG_COLOR, headingSize);
+        final String valueStyleTemplate = String.format("-fx-text-fill: #263238; -fx-font-size: %.1fpx;", valueSize);
+
+        // apply styles on FX thread
+        Platform.runLater(() -> {
+            for (Label h : headingLabels) {
+                // preserve padding/alignment etc. by only setting style; this replaces previous
+                // inline style
+                h.setStyle(headingStyleTemplate);
+            }
+            for (Label v : valueLabels) {
+                v.setStyle(valueStyleTemplate);
+            }
+        });
+    }
+
+    private static double clamp(double v, double min, double max) {
+        if (v < min)
+            return min;
+        if (v > max)
+            return max;
+        return v;
     }
 }
