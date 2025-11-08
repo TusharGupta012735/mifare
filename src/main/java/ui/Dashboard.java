@@ -470,10 +470,225 @@ public class Dashboard extends BorderPane {
             setContent(page);
         });
 
-        // Report placeholder
         reportBtn.setOnAction(e -> {
             leaveAttendance();
-            setContent("📊 Report Page");
+
+            // Build the UI: selectors on top, TableView for results below
+            Label title = new Label("📋 Trans / Attendance Records");
+            title.setStyle("-fx-font-size:20px; -fx-font-weight:700; -fx-text-fill:#0D47A1;");
+            HBox titleWrap = new HBox(title);
+            titleWrap.setAlignment(Pos.CENTER_LEFT);
+            titleWrap.setPadding(new Insets(6, 0, 12, 0));
+
+            ComboBox<String> stateCb = new ComboBox<>();
+            stateCb.setPromptText("State (optional)");
+            ComboBox<String> categoryCb = new ComboBox<>();
+            categoryCb.setPromptText("Category (optional)");
+
+            // Try to populate from AccessDb (off the FX thread)
+            new Thread(() -> {
+                try {
+                    java.util.List<String> states = db.AccessDb.fetchDistinctStates();
+                    java.util.List<String> cats = db.AccessDb.fetchDistinctExcelCategories();
+                    Platform.runLater(() -> {
+                        stateCb.getItems().clear();
+                        stateCb.getItems().add(""); // allow empty selection
+                        stateCb.getItems().addAll(states);
+                        categoryCb.getItems().clear();
+                        categoryCb.getItems().add("");
+                        categoryCb.getItems().addAll(cats);
+                    });
+                } catch (Exception ex) {
+                    ex.printStackTrace();
+                    Platform.runLater(() -> {
+                        stateCb.getItems().clear();
+                        categoryCb.getItems().clear();
+                    });
+                }
+            }, "load-states-cats").start();
+
+            Button loadBtn = new Button("Load");
+            Button exportBtn = new Button("Export CSV");
+            exportBtn.setDisable(true); // only enabled when table has rows
+
+            HBox controls = new HBox(10, new Label("State:"), stateCb, new Label("Category:"), categoryCb, loadBtn,
+                    exportBtn);
+            controls.setAlignment(Pos.CENTER_LEFT);
+            controls.setPadding(new Insets(6, 0, 12, 0));
+
+            // Small inline status / message label (for errors / confirmations)
+            Label inlineMsg = new Label();
+            inlineMsg.setStyle("-fx-text-fill:#2E7D32; -fx-font-weight:600;");
+
+            // TableView<Map<String,String>>
+            TableView<Map<String, String>> table = new TableView<>();
+            table.setPlaceholder(new Label("No records loaded."));
+
+            // Include rank and bsguid and other useful columns
+            java.util.List<String> colKeys = Arrays.asList(
+                    "date_time", "fullname", "bsguid", "rank", "location", "event", "bsgState", "excel_category");
+
+            java.util.Map<String, String> colTitles = new HashMap<>();
+            colTitles.put("date_time", "Date / Time");
+            colTitles.put("fullname", "Full Name");
+            colTitles.put("bsguid", "BSGUID");
+            colTitles.put("rank", "Rank/Section");
+            colTitles.put("location", "Location");
+            colTitles.put("event", "Event");
+            colTitles.put("bsgState", "State");
+            colTitles.put("excel_category", "Category");
+
+            for (String key : colKeys) {
+                TableColumn<Map<String, String>, String> tc = new TableColumn<>(colTitles.getOrDefault(key, key));
+                tc.setCellValueFactory(cell -> {
+                    Map<String, String> row = cell.getValue();
+                    String v = row == null ? "" : (row.get(key) == null ? "" : row.get(key));
+                    return new javafx.beans.property.ReadOnlyStringWrapper(v);
+                });
+                // make useful columns wider
+                if ("fullname".equals(key))
+                    tc.setPrefWidth(220);
+                else if ("location".equals(key) || "event".equals(key))
+                    tc.setPrefWidth(160);
+                else if ("date_time".equals(key))
+                    tc.setPrefWidth(160);
+                else
+                    tc.setPrefWidth(120);
+                table.getColumns().add(tc);
+            }
+
+            VBox page = new VBox(8, titleWrap, controls, inlineMsg, table);
+            page.setPadding(new Insets(12));
+            VBox.setVgrow(table, Priority.ALWAYS);
+
+            setContent(page);
+
+            // Helper to convert currently displayed table rows to CSV string
+            java.util.function.Supplier<String> buildCsvFromTable = () -> {
+                StringBuilder sb = new StringBuilder();
+                // header
+                sb.append(String.join(",", colKeys.stream().map(k -> "\"" + colTitles.getOrDefault(k, k) + "\"")
+                        .toArray(String[]::new))).append("\n");
+                for (Map<String, String> row : table.getItems()) {
+                    List<String> cells = new ArrayList<>();
+                    for (String k : colKeys) {
+                        String v = row.getOrDefault(k, "");
+                        // escape double quotes by doubling
+                        v = v.replace("\"", "\"\"");
+                        cells.add("\"" + v + "\"");
+                    }
+                    sb.append(String.join(",", cells)).append("\n");
+                }
+                return sb.toString();
+            };
+
+            // Export CSV action (open FileChooser)
+            exportBtn.setOnAction(x -> {
+                try {
+                    if (table.getItems().isEmpty()) {
+                        inlineMsg.setText("No rows to export.");
+                        return;
+                    }
+                    javafx.stage.FileChooser fc = new javafx.stage.FileChooser();
+                    fc.setTitle("Save trans as CSV");
+                    fc.getExtensionFilters().add(new javafx.stage.FileChooser.ExtensionFilter("CSV Files", "*.csv"));
+                    fc.setInitialFileName("trans_export.csv");
+                    java.io.File chosen = fc
+                            .showSaveDialog(this.getScene() == null ? null : this.getScene().getWindow());
+                    if (chosen == null) {
+                        return; // user cancelled
+                    }
+                    String csv = buildCsvFromTable.get();
+                    try (java.io.OutputStreamWriter w = new java.io.OutputStreamWriter(
+                            new java.io.FileOutputStream(chosen), java.nio.charset.StandardCharsets.UTF_8)) {
+                        w.write(csv);
+                    }
+                    inlineMsg.setStyle("-fx-text-fill:#2E7D32; -fx-font-weight:600;");
+                    inlineMsg.setText("Exported " + table.getItems().size() + " row(s) to " + chosen.getName());
+                } catch (Exception ex) {
+                    ex.printStackTrace();
+                    inlineMsg.setStyle("-fx-text-fill:#C62828; -fx-font-weight:600;");
+                    inlineMsg.setText("Export failed: " + ex.getMessage());
+                }
+            });
+
+            // Load action: query DB (off UI thread) and populate table
+            loadBtn.setOnAction(ev -> {
+                loadBtn.setDisable(true);
+                exportBtn.setDisable(true);
+                inlineMsg.setText("");
+                table.getItems().clear();
+
+                final String chosenState = (stateCb.getValue() == null || stateCb.getValue().isBlank()) ? null
+                        : stateCb.getValue().trim();
+                final String chosenCat = (categoryCb.getValue() == null || categoryCb.getValue().isBlank()) ? null
+                        : categoryCb.getValue().trim();
+
+                Thread q = new Thread(() -> {
+                    java.util.List<Map<String, String>> rows = new ArrayList<>();
+                    // Query trans joined with ParticipantsRecord to get state/category/rank
+                    String sql = """
+                            SELECT t.[date_time], t.[fullname], t.[bsguid], t.[location], t.[event],
+                                   p.[bsgState], p.[excel_category], p.[rank_or_section]
+                            FROM [trans] t
+                            LEFT JOIN [ParticipantsRecord] p ON p.[BSGUID] = t.[bsguid]
+                            WHERE 1=1
+                            """;
+                    java.util.List<Object> params = new ArrayList<>();
+                    if (chosenState != null) {
+                        sql += " AND UCASE(p.[bsgState]) LIKE UCASE(?)";
+                        params.add("%" + chosenState + "%");
+                    }
+                    if (chosenCat != null) {
+                        sql += " AND UCASE(p.[excel_category]) LIKE UCASE(?)";
+                        params.add("%" + chosenCat + "%");
+                    }
+                    sql += " ORDER BY t.[date_time] DESC";
+
+                    try (java.sql.Connection c = db.AccessDb.getConnection();
+                            java.sql.PreparedStatement ps = c.prepareStatement(sql)) {
+
+                        for (int i = 0; i < params.size(); i++) {
+                            ps.setString(i + 1, params.get(i).toString());
+                        }
+
+                        try (java.sql.ResultSet rs = ps.executeQuery()) {
+                            while (rs.next()) {
+                                Map<String, String> r = new LinkedHashMap<>();
+                                r.put("date_time", Optional.ofNullable(rs.getString("date_time")).orElse(""));
+                                r.put("fullname", Optional.ofNullable(rs.getString("fullname")).orElse(""));
+                                r.put("bsguid", Optional.ofNullable(rs.getString("bsguid")).orElse(""));
+                                r.put("rank", Optional.ofNullable(rs.getString("rank_or_section")).orElse(""));
+                                r.put("location", Optional.ofNullable(rs.getString("location")).orElse(""));
+                                r.put("event", Optional.ofNullable(rs.getString("event")).orElse(""));
+                                r.put("bsgState", Optional.ofNullable(rs.getString("bsgState")).orElse(""));
+                                r.put("excel_category", Optional.ofNullable(rs.getString("excel_category")).orElse(""));
+                                rows.add(r);
+                            }
+                        }
+                    } catch (Exception ex) {
+                        ex.printStackTrace();
+                        Platform.runLater(() -> {
+                            inlineMsg.setStyle("-fx-text-fill:#C62828; -fx-font-weight:600;");
+                            inlineMsg.setText("Failed to load records: " + ex.getMessage());
+                            loadBtn.setDisable(false);
+                            exportBtn.setDisable(true);
+                        });
+                        return;
+                    }
+
+                    final java.util.List<Map<String, String>> finalRows = rows;
+                    Platform.runLater(() -> {
+                        table.getItems().setAll(finalRows);
+                        loadBtn.setDisable(false);
+                        exportBtn.setDisable(finalRows.isEmpty());
+                        inlineMsg.setStyle("-fx-text-fill:#2E7D32; -fx-font-weight:600;");
+                        inlineMsg.setText("Loaded " + finalRows.size() + " row(s).");
+                    });
+                }, "load-trans-thread");
+                q.setDaemon(true);
+                q.start();
+            });
         });
 
         // NEW: Import Excel wiring
