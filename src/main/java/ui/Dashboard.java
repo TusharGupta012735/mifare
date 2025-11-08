@@ -189,6 +189,7 @@ public class Dashboard extends BorderPane {
         contentArea.setPadding(new Insets(20));
         attendanceView = new AttendanceView();
         setContent(attendanceView.getView());
+        attendanceView.setLogo("src/main/resources/logo-removebg-preview.png");
         onAttendanceTab.set(true);
         startAttendancePoller();
 
