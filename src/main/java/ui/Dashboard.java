@@ -27,10 +27,7 @@ public class Dashboard extends BorderPane {
     private final AtomicBoolean attendancePollerRunning = new AtomicBoolean(false);
     private final AtomicBoolean onAttendanceTab = new AtomicBoolean(false);
 
-    // Simple attendance view controls we update from the poller
-    private Label attendanceHeadline; // big prompt ("Tap your card", "Card read", etc)
-    private Label attendanceUid; // shows UID
-    private VBox attendanceView; // root node for attendance page
+    private AttendanceView attendanceView;
 
     // Make inputs/headings larger & cleaner without touching EntryForm code
     private void prettifyForm(Parent root) {
@@ -190,7 +187,8 @@ public class Dashboard extends BorderPane {
 
         // --- Default Content: ATTENDANCE ---
         contentArea.setPadding(new Insets(20));
-        setContent(createAttendanceView());
+        attendanceView = new AttendanceView();
+        setContent(attendanceView.getView());
         onAttendanceTab.set(true);
         startAttendancePoller();
 
@@ -201,7 +199,8 @@ public class Dashboard extends BorderPane {
         // --- Actions ---
         attendanceBtn.setOnAction(e -> {
             onAttendanceTab.set(true);
-            setContent(createAttendanceView()); // rebuild attendance view
+            attendanceView = new AttendanceView(); // create new instance
+            setContent(attendanceView.getView());
             startAttendancePoller();
         });
 
@@ -504,75 +503,43 @@ public class Dashboard extends BorderPane {
         newText.setStyle("-fx-font-size: 20px; -fx-fill: #212121; -fx-font-weight: 600;");
         setContent(newText);
     }
-
-    // -------- Attendance UI (inline, replaces AttendancePage.create()) --------
-    private Parent createAttendanceView() {
-        attendanceHeadline = new Label("Tap your card");
-        attendanceHeadline.setStyle("""
-                        -fx-font-size: 28px;
-                        -fx-font-weight: 900;
-                        -fx-text-fill: #0D47A1;
-                """);
-
-        attendanceUid = new Label("");
-        attendanceUid.setStyle("""
-                        -fx-font-size: 20px;
-                        -fx-font-weight: 700;
-                        -fx-text-fill: #2E7D32;
-                """);
-
-        Label sub = new Label("Hold for a moment, then remove the card to continue.");
-        sub.setStyle("-fx-font-size: 13px; -fx-text-fill: #455A64;");
-
-        VBox box = new VBox(12, attendanceHeadline, attendanceUid, sub);
-        box.setAlignment(Pos.CENTER);
-        box.setPadding(new Insets(30));
-        box.setStyle("""
-                        -fx-background-color: white;
-                        -fx-background-radius: 12;
-                        -fx-effect: dropshadow(gaussian, rgba(0,0,0,0.06), 16, 0, 0, 4);
-                """);
-
-        StackPane wrapper = new StackPane(box);
-        wrapper.setPadding(new Insets(10));
-        wrapper.setStyle("-fx-background-color: #ECEFF1;");
-
-        attendanceView = new VBox(wrapper);
-        attendanceView.setFillWidth(true);
-
-        // Reset initial prompt
-        setAttendancePrompt();
-
-        return attendanceView;
-    }
-
     private void setAttendancePrompt() {
         Platform.runLater(() -> {
-            if (attendanceHeadline != null) {
-                attendanceHeadline.setText("Tap your card");
-                attendanceHeadline.setTextFill(Color.web("#0D47A1"));
+            if (attendanceView != null) {
+                attendanceView.getHeadline().setText("Tap your card");
+                attendanceView.getHeadline().setStyle("""
+                                -fx-font-size: 28px;
+                                -fx-font-weight: 900;
+                                -fx-text-fill: #0D47A1;
+                        """);
+                attendanceView.getUidLabel().setText("");
             }
-            if (attendanceUid != null)
-                attendanceUid.setText("");
         });
     }
 
     private void showUid(String uid) {
         Platform.runLater(() -> {
-            if (attendanceHeadline != null) {
-                attendanceHeadline.setText("Card detected");
-                attendanceHeadline.setTextFill(Color.web("#2E7D32"));
+            if (attendanceView != null) {
+                attendanceView.getHeadline().setText("Card detected");
+                attendanceView.getHeadline().setStyle("""
+                                -fx-font-size: 28px;
+                                -fx-font-weight: 900;
+                                -fx-text-fill: #2E7D32;
+                        """);
+                attendanceView.getUidLabel().setText("UID: " + uid);
             }
-            if (attendanceUid != null)
-                attendanceUid.setText("UID: " + uid);
         });
     }
 
     private void showRemovePrompt() {
         Platform.runLater(() -> {
-            if (attendanceHeadline != null) {
-                attendanceHeadline.setText("Remove card…");
-                attendanceHeadline.setTextFill(Color.web("#E65100"));
+            if (attendanceView != null) {
+                attendanceView.getHeadline().setText("Remove card…");
+                attendanceView.getHeadline().setStyle("""
+                                -fx-font-size: 28px;
+                                -fx-font-weight: 900;
+                                -fx-text-fill: #E65100;
+                        """);
             }
         });
     }
