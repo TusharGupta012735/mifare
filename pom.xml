@@ -5,7 +5,7 @@
 
   <groupId>com.yourorg</groupId>
   <artifactId>attendance-app</artifactId>
-  <version>1.0.1</version>
+  <version>1.0.2</version>
   <name>Attendance App</name>
 
   <properties>
