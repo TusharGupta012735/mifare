@@ -27,6 +27,11 @@ public class Dashboard extends BorderPane {
     private final AtomicBoolean attendancePollerRunning = new AtomicBoolean(false);
     private final AtomicBoolean onAttendanceTab = new AtomicBoolean(false);
 
+    // Reuse these whenever the Attendance tab is (re)loaded
+    private static final String LOC_EVENT_PATH = "src/main/resources/location.txt";
+    private static final boolean LOC_EVENT_CLASSPATH = false;
+    private static final String LOGO_PATH = "src/main/resources/logo-removebg-preview.png";
+
     private AttendanceView attendanceView;
 
     // Make inputs/headings larger & cleaner without touching EntryForm code
@@ -189,8 +194,8 @@ public class Dashboard extends BorderPane {
         contentArea.setPadding(new Insets(20));
         attendanceView = new AttendanceView();
         setContent(attendanceView.getView());
-        attendanceView.setLogo("src/main/resources/logo-removebg-preview.png");
-        attendanceView.loadLocationEventFromFile("src/main/resources/location.txt", false);
+        attendanceView.setLogo(LOGO_PATH);
+        attendanceView.loadLocationEventFromFile(LOC_EVENT_PATH, LOC_EVENT_CLASSPATH);
 
         onAttendanceTab.set(true);
         startAttendancePoller();
@@ -204,6 +209,7 @@ public class Dashboard extends BorderPane {
             onAttendanceTab.set(true);
             attendanceView = new AttendanceView(); // create new instance
             setContent(attendanceView.getView());
+            attendanceView.loadLocationEventFromFile(LOC_EVENT_PATH, LOC_EVENT_CLASSPATH);
             startAttendancePoller();
         });
 
