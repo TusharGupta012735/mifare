@@ -276,6 +276,7 @@ public class Dashboard extends BorderPane {
         attendanceBtn.setOnAction(e -> {
             onAttendanceTab.set(true);
             attendanceView = new AttendanceView(); // create new instance
+            attendanceView.setLogo(LOGO_PATH);
             setContent(attendanceView.getView());
             java.nio.file.Path writableLocReload = ensureWritableLocationFilePresent();
             attendanceView.loadLocationEventFromFile(writableLocReload.toString(), false);
