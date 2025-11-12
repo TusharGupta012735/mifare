@@ -870,25 +870,47 @@ public class AccessDb {
 
                 int affected = 0;
 
-                // Prepared SELECT to check if row exists
-                String selectSql = "SELECT SlNo FROM ParticipantsRecord WHERE UCASE(FullName)=UCASE(?) AND UCASE(BSGUID)=UCASE(?)";
-                try (PreparedStatement select = c.prepareStatement(selectSql)) {
+                // Two SELECTs: one when BSGUID is present, one when BSGUID is missing (NULL or
+                // empty in DB)
+                String selectWithGuid = "SELECT SlNo FROM ParticipantsRecord WHERE UCASE(FullName)=UCASE(?) AND UCASE(BSGUID)=UCASE(?)";
+                String selectWithoutGuid = "SELECT SlNo FROM ParticipantsRecord WHERE UCASE(FullName)=UCASE(?) AND (BSGUID IS NULL OR BSGUID='')";
+
+                try (PreparedStatement selectWith = c.prepareStatement(selectWithGuid);
+                        PreparedStatement selectWithout = c.prepareStatement(selectWithoutGuid)) {
 
                     for (Map<String, String> r : rows) {
 
                         String name = safe(r, "FullName");
                         String bsguid = safe(r, "BSGUID");
 
-                        if (name == null || bsguid == null || name.isEmpty() || bsguid.isEmpty())
-                            continue; // skip incomplete rows
+                        // Normalize empty strings to null for easier checks
+                        if (name != null)
+                            name = name.trim();
+                        if (bsguid != null) {
+                            bsguid = bsguid.trim();
+                            if (bsguid.isEmpty())
+                                bsguid = null;
+                        }
 
-                        // Check if exists
+                        // Still require a name
+                        if (name == null || name.isEmpty())
+                            continue; // skip rows without a name
+
+                        // Check if exists (choose select based on presence of BSGUID)
                         Long existingId = null;
-                        select.setString(1, name);
-                        select.setString(2, bsguid);
-                        try (ResultSet rs = select.executeQuery()) {
-                            if (rs.next())
-                                existingId = rs.getLong(1);
+                        if (bsguid != null) {
+                            selectWith.setString(1, name);
+                            selectWith.setString(2, bsguid);
+                            try (ResultSet rs = selectWith.executeQuery()) {
+                                if (rs.next())
+                                    existingId = rs.getLong(1);
+                            }
+                        } else {
+                            selectWithout.setString(1, name);
+                            try (ResultSet rs = selectWithout.executeQuery()) {
+                                if (rs.next())
+                                    existingId = rs.getLong(1);
+                            }
                         }
 
                         // Normalize / convert values
@@ -899,13 +921,18 @@ public class AccessDb {
                             // ---------- UPDATE ----------
                             String update = """
                                     UPDATE ParticipantsRecord SET
-                                      ParticipationType = ?, bsgDistrict = ?, Email = ?, phoneNumber = ?,
+                                      BSGUID = ?, ParticipationType = ?, bsgDistrict = ?, Email = ?, phoneNumber = ?,
                                       bsgState = ?, memberType = ?, unitName = ?, rank_or_section = ?,
                                       dateOfBirth = ?, age = ?, excel_category = ?, status = 'F'
                                     WHERE SlNo = ?
                                     """;
                             try (PreparedStatement ps = c.prepareStatement(update)) {
                                 int i = 1;
+                                if (bsguid != null)
+                                    ps.setString(i++, bsguid);
+                                else
+                                    ps.setNull(i++, java.sql.Types.VARCHAR);
+
                                 ps.setString(i++, safe(r, "ParticipationType"));
                                 ps.setString(i++, safe(r, "bsgDistrict"));
                                 ps.setString(i++, safe(r, "Email"));
@@ -936,7 +963,11 @@ public class AccessDb {
                             try (PreparedStatement ps = c.prepareStatement(insert)) {
                                 int i = 1;
                                 ps.setString(i++, name);
-                                ps.setString(i++, bsguid);
+                                if (bsguid != null)
+                                    ps.setString(i++, bsguid);
+                                else
+                                    ps.setNull(i++, java.sql.Types.VARCHAR);
+
                                 ps.setString(i++, safe(r, "ParticipationType"));
                                 ps.setString(i++, safe(r, "bsgDistrict"));
                                 ps.setString(i++, safe(r, "Email"));
