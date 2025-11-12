@@ -870,10 +870,10 @@ public class AccessDb {
 
                 int affected = 0;
 
-                // Two SELECTs: one when BSGUID is present, one when BSGUID is missing (NULL or
-                // empty in DB)
-                String selectWithGuid = "SELECT SlNo FROM ParticipantsRecord WHERE UCASE(FullName)=UCASE(?) AND UCASE(BSGUID)=UCASE(?)";
-                String selectWithoutGuid = "SELECT SlNo FROM ParticipantsRecord WHERE UCASE(FullName)=UCASE(?) AND (BSGUID IS NULL OR BSGUID='')";
+                // SELECTs now return SlNo, CardUID, status so we can decide whether to touch
+                // status/CardUID
+                String selectWithGuid = "SELECT SlNo, CardUID, [status] FROM ParticipantsRecord WHERE UCASE(FullName)=UCASE(?) AND UCASE(BSGUID)=UCASE(?)";
+                String selectWithoutGuid = "SELECT SlNo, CardUID, [status] FROM ParticipantsRecord WHERE UCASE(FullName)=UCASE(?) AND (BSGUID IS NULL OR BSGUID='')";
 
                 try (PreparedStatement selectWith = c.prepareStatement(selectWithGuid);
                         PreparedStatement selectWithout = c.prepareStatement(selectWithoutGuid)) {
@@ -898,18 +898,27 @@ public class AccessDb {
 
                         // Check if exists (choose select based on presence of BSGUID)
                         Long existingId = null;
+                        String existingCardUid = null;
+                        String existingStatus = null;
+
                         if (bsguid != null) {
                             selectWith.setString(1, name);
                             selectWith.setString(2, bsguid);
                             try (ResultSet rs = selectWith.executeQuery()) {
-                                if (rs.next())
+                                if (rs.next()) {
                                     existingId = rs.getLong(1);
+                                    existingCardUid = rs.getString(2);
+                                    existingStatus = rs.getString(3);
+                                }
                             }
                         } else {
                             selectWithout.setString(1, name);
                             try (ResultSet rs = selectWithout.executeQuery()) {
-                                if (rs.next())
+                                if (rs.next()) {
                                     existingId = rs.getLong(1);
+                                    existingCardUid = rs.getString(2);
+                                    existingStatus = rs.getString(3);
+                                }
                             }
                         }
 
@@ -918,37 +927,73 @@ public class AccessDb {
                         String dobIso = normalizeDobOrNull(safe(r, "dateOfBirth"));
 
                         if (existingId != null) {
-                            // ---------- UPDATE ----------
-                            String update = """
-                                    UPDATE ParticipantsRecord SET
-                                      BSGUID = ?, ParticipationType = ?, bsgDistrict = ?, Email = ?, phoneNumber = ?,
-                                      bsgState = ?, memberType = ?, unitName = ?, rank_or_section = ?,
-                                      dateOfBirth = ?, age = ?, excel_category = ?, status = 'F'
-                                    WHERE SlNo = ?
-                                    """;
-                            try (PreparedStatement ps = c.prepareStatement(update)) {
-                                int i = 1;
-                                if (bsguid != null)
-                                    ps.setString(i++, bsguid);
-                                else
-                                    ps.setNull(i++, java.sql.Types.VARCHAR);
+                            // If the existing record already has a non-empty CardUID AND status='T',
+                            // we must NOT set status='F' (we should preserve status and CardUID).
+                            boolean hasCard = existingCardUid != null && !existingCardUid.trim().isEmpty();
+                            boolean isT = existingStatus != null && "T".equalsIgnoreCase(existingStatus.trim());
 
-                                ps.setString(i++, safe(r, "ParticipationType"));
-                                ps.setString(i++, safe(r, "bsgDistrict"));
-                                ps.setString(i++, safe(r, "Email"));
-                                ps.setString(i++, phone);
-                                ps.setString(i++, safe(r, "bsgState"));
-                                ps.setString(i++, safe(r, "memberType"));
-                                ps.setString(i++, safe(r, "unitName"));
-                                ps.setString(i++, safe(r, "rank_or_section"));
-                                if (dobIso != null)
-                                    ps.setDate(i++, java.sql.Date.valueOf(dobIso));
-                                else
-                                    ps.setNull(i++, java.sql.Types.DATE);
-                                ps.setString(i++, safe(r, "age"));
-                                ps.setString(i++, excelCategory);
-                                ps.setLong(i++, existingId);
-                                affected += ps.executeUpdate();
+                            if (hasCard && isT) {
+                                // Update without touching status or CardUID
+                                String updateKeepStatus = """
+                                        UPDATE ParticipantsRecord SET
+                                          ParticipationType = ?, bsgDistrict = ?, Email = ?, phoneNumber = ?,
+                                          bsgState = ?, memberType = ?, unitName = ?, rank_or_section = ?,
+                                          dateOfBirth = ?, age = ?, excel_category = ?
+                                        WHERE SlNo = ?
+                                        """;
+                                try (PreparedStatement ps = c.prepareStatement(updateKeepStatus)) {
+                                    int i = 1;
+                                    ps.setString(i++, safe(r, "ParticipationType"));
+                                    ps.setString(i++, safe(r, "bsgDistrict"));
+                                    ps.setString(i++, safe(r, "Email"));
+                                    ps.setString(i++, phone);
+                                    ps.setString(i++, safe(r, "bsgState"));
+                                    ps.setString(i++, safe(r, "memberType"));
+                                    ps.setString(i++, safe(r, "unitName"));
+                                    ps.setString(i++, safe(r, "rank_or_section"));
+                                    if (dobIso != null)
+                                        ps.setDate(i++, java.sql.Date.valueOf(dobIso));
+                                    else
+                                        ps.setNull(i++, java.sql.Types.DATE);
+                                    ps.setString(i++, safe(r, "age"));
+                                    ps.setString(i++, excelCategory);
+                                    ps.setLong(i++, existingId);
+                                    affected += ps.executeUpdate();
+                                }
+                            } else {
+                                // Safe to set status='F' (either no card present before or status not 'T').
+                                // Also update BSGUID (may be null).
+                                String update = """
+                                        UPDATE ParticipantsRecord SET
+                                          BSGUID = ?, ParticipationType = ?, bsgDistrict = ?, Email = ?, phoneNumber = ?,
+                                          bsgState = ?, memberType = ?, unitName = ?, rank_or_section = ?,
+                                          dateOfBirth = ?, age = ?, excel_category = ?, status = 'F'
+                                        WHERE SlNo = ?
+                                        """;
+                                try (PreparedStatement ps = c.prepareStatement(update)) {
+                                    int i = 1;
+                                    if (bsguid != null)
+                                        ps.setString(i++, bsguid);
+                                    else
+                                        ps.setNull(i++, java.sql.Types.VARCHAR);
+
+                                    ps.setString(i++, safe(r, "ParticipationType"));
+                                    ps.setString(i++, safe(r, "bsgDistrict"));
+                                    ps.setString(i++, safe(r, "Email"));
+                                    ps.setString(i++, phone);
+                                    ps.setString(i++, safe(r, "bsgState"));
+                                    ps.setString(i++, safe(r, "memberType"));
+                                    ps.setString(i++, safe(r, "unitName"));
+                                    ps.setString(i++, safe(r, "rank_or_section"));
+                                    if (dobIso != null)
+                                        ps.setDate(i++, java.sql.Date.valueOf(dobIso));
+                                    else
+                                        ps.setNull(i++, java.sql.Types.DATE);
+                                    ps.setString(i++, safe(r, "age"));
+                                    ps.setString(i++, excelCategory);
+                                    ps.setLong(i++, existingId);
+                                    affected += ps.executeUpdate();
+                                }
                             }
 
                         } else {
