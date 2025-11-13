@@ -91,6 +91,7 @@ public final class ExcelImportDialog {
         final String[] currentSheetName = new String[1];
 
         // browse action
+        // browse action
         browse.setOnAction(e -> {
             FileChooser fc = new FileChooser();
             fc.getExtensionFilters().addAll(
@@ -101,27 +102,33 @@ public final class ExcelImportDialog {
                 return;
 
             fileField.setText(f.getAbsolutePath());
-            loadSheetsIntoCombo(f, sheetBox);
+
+            // clear any stale preview first
             table.getItems().clear();
             table.getColumns().clear();
             importBtn.setDisable(true);
+
+            loadSheetsIntoCombo(f, sheetBox);
+            // loadSheetsIntoCombo will selectFirst() which in turn triggers the
+            // selectedItemProperty listener
         });
 
         // sheet selection -> preview
-        sheetBox.setOnAction(e -> {
-            String sheet = sheetBox.getValue();
-            if (sheet == null || fileField.getText().isBlank())
+        sheetBox.getSelectionModel().selectedItemProperty().addListener((obs, oldSheet, newSheet) -> {
+            if (newSheet == null || fileField.getText().isBlank())
                 return;
             File f = new File(fileField.getText());
             try {
-                List<Map<String, String>> rows = readSheet(f, sheet, 200); // preview first 200
+                List<Map<String, String>> rows = readSheet(f, newSheet, 200); // preview first 200
                 currentData[0] = rows;
-                currentSheetName[0] = sheet;
+                currentSheetName[0] = newSheet;
                 buildTable(table, rows);
                 importBtn.setDisable(rows.isEmpty());
             } catch (Exception ex) {
                 showAlert(Alert.AlertType.ERROR, "Failed to read sheet: " + ex.getMessage());
                 importBtn.setDisable(true);
+                table.getItems().clear();
+                table.getColumns().clear();
             }
         });
 

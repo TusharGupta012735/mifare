@@ -1,5 +1,6 @@
 package ui;
 
+import java.io.IOException;
 import java.util.*;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.stream.Collectors;
@@ -215,7 +216,8 @@ public class Dashboard extends BorderPane {
         Button entryFormBtn = new Button("Entry Form");
         Button batchBtn = new Button("Batch (Filter)");
         Button reportBtn = new Button("Report");
-        Button importBtn = new Button("Import Excel"); // NEW
+        Button importBtn = new Button("Import Excel");
+        Button exportParticipantsBtn = new Button("Export Data");
 
         // --- Common Button Style ---
         String btnStyle = """
@@ -240,19 +242,21 @@ public class Dashboard extends BorderPane {
                     -fx-effect: dropshadow(gaussian, rgba(0,0,0,0.3), 6, 0, 0, 2);
                 """;
 
-        for (Button btn : new Button[] { attendanceBtn, entryFormBtn, batchBtn, reportBtn, importBtn }) {
+        for (Button btn : new Button[] { attendanceBtn, entryFormBtn, batchBtn, reportBtn, importBtn,
+                exportParticipantsBtn }) {
             btn.setStyle(btnStyle);
             btn.setOnMouseEntered(e -> btn.setStyle(hoverStyle));
             btn.setOnMouseExited(e -> btn.setStyle(btnStyle));
         }
 
         // --- Navbar Layout (added Import Excel at the end) ---
-        HBox navBar = new HBox(20, attendanceBtn, entryFormBtn, batchBtn, reportBtn, importBtn);
+        HBox navBar = new HBox(20, attendanceBtn, entryFormBtn, batchBtn, reportBtn, importBtn, exportParticipantsBtn);
         navBar.setPadding(new Insets(15, 20, 15, 20));
         navBar.setStyle(
                 "-fx-background-color: linear-gradient(to bottom, #1565c0, #0d47a1); -fx-alignment: center; -fx-effect: dropshadow(gaussian, rgba(0,0,0,0.2), 8, 0, 0, 2);");
 
-        for (Button btn : new Button[] { attendanceBtn, entryFormBtn, batchBtn, reportBtn, importBtn }) {
+        for (Button btn : new Button[] { attendanceBtn, entryFormBtn, batchBtn, reportBtn, importBtn,
+                exportParticipantsBtn }) {
             HBox.setHgrow(btn, Priority.ALWAYS);
             btn.setMaxWidth(Double.MAX_VALUE);
         }
@@ -581,8 +585,21 @@ public class Dashboard extends BorderPane {
             Button exportBtn = new Button("Export CSV");
             exportBtn.setDisable(true); // only enabled when table has rows
 
-            HBox controls = new HBox(10, new Label("State:"), stateCb, new Label("Category:"), categoryCb, loadBtn,
-                    exportBtn);
+            // --- DATE PICKERS: From / To (inclusive) ---
+            DatePicker fromDate = new DatePicker();
+            fromDate.setPromptText("From (date)");
+            DatePicker toDate = new DatePicker();
+            toDate.setPromptText("To (date)");
+
+            // You can default fromDate if you want, e.g. last 7 days:
+            // fromDate.setValue(java.time.LocalDate.now().minusDays(7));
+
+            HBox controls = new HBox(10,
+                    new Label("State:"), stateCb,
+                    new Label("Category:"), categoryCb,
+                    new Label("From:"), fromDate,
+                    new Label("To:"), toDate,
+                    loadBtn, exportBtn);
             controls.setAlignment(Pos.CENTER_LEFT);
             controls.setPadding(new Insets(6, 0, 12, 0));
 
@@ -713,6 +730,35 @@ public class Dashboard extends BorderPane {
                         sql += " AND UCASE(p.[excel_category]) LIKE UCASE(?)";
                         params.add("%" + chosenCat + "%");
                     }
+
+                    // --- Date range filtering (inclusive) ---
+                    // trans.date_time is stored as "yyyy-MM-dd HH:mm:ss" (text); lexicographic
+                    // comparison works.
+                    java.time.format.DateTimeFormatter dtf = java.time.format.DateTimeFormatter
+                            .ofPattern("yyyy-MM-dd HH:mm:ss");
+
+                    java.time.LocalDate from = fromDate.getValue();
+                    java.time.LocalDate to = toDate.getValue();
+
+                    // optional validation: if both present and from > to, swap or return empty
+                    if (from != null && to != null && from.isAfter(to)) {
+                        // swap so query still returns expected results, or you could show inline error.
+                        java.time.LocalDate tmp = from;
+                        from = to;
+                        to = tmp;
+                    }
+
+                    if (from != null) {
+                        String fromTs = from.atStartOfDay().format(dtf); // "YYYY-MM-DD 00:00:00"
+                        sql += " AND t.[date_time] >= ?";
+                        params.add(fromTs);
+                    }
+                    if (to != null) {
+                        String toTs = to.atTime(23, 59, 59).format(dtf); // "YYYY-MM-DD 23:59:59"
+                        sql += " AND t.[date_time] <= ?";
+                        params.add(toTs);
+                    }
+
                     sql += " ORDER BY t.[date_time] DESC";
 
                     try (java.sql.Connection c = db.AccessDb.getConnection();
@@ -775,6 +821,207 @@ public class Dashboard extends BorderPane {
                 a.showAndWait();
             }
         });
+
+        // --- Export Participants button action (fixed dialog typing) ---
+        // --- Export Participants button action (improved: bigger dialog + robust CSV
+        // write) ---
+        exportParticipantsBtn.setOnAction(ev -> {
+            leaveAttendance();
+
+            Dialog<ButtonType> dlg = new Dialog<>();
+            dlg.initOwner(this.getScene() == null ? null : this.getScene().getWindow());
+            dlg.setTitle("Export Database");
+
+            ButtonType exportType = new ButtonType("Export", ButtonBar.ButtonData.OK_DONE);
+            dlg.getDialogPane().getButtonTypes().addAll(exportType, ButtonType.CANCEL);
+
+            // Controls
+            ComboBox<String> stateCb2 = new ComboBox<>();
+            stateCb2.setPromptText("State (optional)");
+            stateCb2.setMinWidth(300);
+
+            ComboBox<String> categoryCb2 = new ComboBox<>();
+            categoryCb2.setPromptText("Category (optional)");
+            categoryCb2.setMinWidth(300);
+
+            Label msgLbl = new Label("Loading filters...");
+            msgLbl.setWrapText(true);
+            msgLbl.setStyle("-fx-text-fill:#666;");
+
+            GridPane grid = new GridPane();
+            grid.setHgap(10);
+            grid.setVgap(10);
+            grid.setPadding(new Insets(12));
+            grid.add(new Label("State:"), 0, 0);
+            grid.add(stateCb2, 1, 0);
+            grid.add(new Label("Category:"), 0, 1);
+            grid.add(categoryCb2, 1, 1);
+            grid.add(msgLbl, 0, 2, 2, 1);
+
+            // Make dialog larger so it isn't tiny
+            dlg.getDialogPane().setContent(grid);
+            dlg.getDialogPane().setPrefSize(640, 220);
+            dlg.getDialogPane().setMinHeight(Region.USE_PREF_SIZE);
+            dlg.getDialogPane().setMinWidth(Region.USE_PREF_SIZE);
+            dlg.setResizable(true);
+
+            // Disable Export button until we've at least attempted to load combos
+            Node exportButtonNode = dlg.getDialogPane().lookupButton(exportType);
+            exportButtonNode.setDisable(true);
+
+            // Populate the comboboxes in background
+            new Thread(() -> {
+                try {
+                    java.util.List<String> states = db.AccessDb.fetchDistinctStates();
+                    java.util.List<String> cats = db.AccessDb.fetchDistinctExcelCategories();
+                    Platform.runLater(() -> {
+                        stateCb2.getItems().clear();
+                        stateCb2.getItems().add(""); // allow empty
+                        stateCb2.getItems().addAll(states);
+                        categoryCb2.getItems().clear();
+                        categoryCb2.getItems().add("");
+                        categoryCb2.getItems().addAll(cats);
+                        msgLbl.setText("Choose filters (leave empty for all). Click Export to save CSV.");
+                        exportButtonNode.setDisable(false);
+                    });
+                } catch (Exception ex) {
+                    ex.printStackTrace();
+                    Platform.runLater(() -> {
+                        stateCb2.getItems().clear();
+                        categoryCb2.getItems().clear();
+                        msgLbl.setStyle("-fx-text-fill:#C62828;");
+                        msgLbl.setText("Failed to load filter lists: "
+                                + (ex.getMessage() != null ? ex.getMessage() : ex.toString()));
+                        // still allow export (it will fetch without filters)
+                        exportButtonNode.setDisable(false);
+                    });
+                }
+            }, "load-states-cats-export").start();
+
+            Optional<ButtonType> result = dlg.showAndWait();
+            if (result.isEmpty() || result.get().getButtonData() == ButtonBar.ButtonData.CANCEL_CLOSE) {
+                return;
+            }
+
+            // User pressed Export: fetch selection values
+            final String selState = (stateCb2.getValue() == null || stateCb2.getValue().isBlank()) ? null
+                    : stateCb2.getValue().trim();
+            final String selCat = (categoryCb2.getValue() == null || categoryCb2.getValue().isBlank()) ? null
+                    : categoryCb2.getValue().trim();
+
+            // Fetch participants in background
+            new Thread(() -> {
+                java.util.List<Map<String, String>> participants;
+                try {
+                    participants = db.AccessDb.fetchParticipantsByStateAndCategory(selState, selCat, false);
+                } catch (Exception ex) {
+                    ex.printStackTrace();
+                    final String msg = ex.getMessage() == null ? ex.toString() : ex.getMessage();
+                    Platform.runLater(() -> {
+                        Alert a = new Alert(Alert.AlertType.ERROR, "Failed to fetch participants: " + msg,
+                                ButtonType.OK);
+                        a.setHeaderText(null);
+                        a.showAndWait();
+                    });
+                    return;
+                }
+
+                if (participants == null || participants.isEmpty()) {
+                    Platform.runLater(() -> {
+                        Alert a = new Alert(Alert.AlertType.INFORMATION, "No participants found for selected filters.",
+                                ButtonType.OK);
+                        a.setHeaderText(null);
+                        a.showAndWait();
+                    });
+                    return;
+                }
+
+                // Ask where to save (on FX thread)
+                Platform.runLater(() -> {
+                    javafx.stage.FileChooser fc = new javafx.stage.FileChooser();
+                    fc.setTitle("Save Participants as CSV");
+                    fc.getExtensionFilters().add(new javafx.stage.FileChooser.ExtensionFilter("CSV Files", "*.csv"));
+                    fc.setInitialFileName("participants_export.csv");
+                    java.io.File chosen = fc
+                            .showSaveDialog(this.getScene() == null ? null : this.getScene().getWindow());
+                    if (chosen == null) {
+                        // user cancelled save
+                        return;
+                    }
+
+                    // Write CSV in background (so FX thread is not blocked)
+                    new Thread(() -> {
+                        try {
+                            // Ensure parent dir exists
+                            java.io.File parent = chosen.getParentFile();
+                            if (parent != null && !parent.exists()) {
+                                boolean ok = parent.mkdirs();
+                                if (!ok && !parent.exists()) {
+                                    throw new IOException(
+                                            "Failed to create parent directory: " + parent.getAbsolutePath());
+                                }
+                            }
+
+                            // Build header/order
+                            List<String> headerKeys = new ArrayList<>(
+                                    Arrays.asList("FullName", "BSGUID", "ParticipationType", "bsgDistrict",
+                                            "Email", "phoneNumber", "bsgState", "memberType", "unitName",
+                                            "rank_or_section", "dateOfBirth", "age", "status", "CardUID"));
+
+                            Map<String, String> first = participants.get(0);
+                            for (String k : first.keySet()) {
+                                if (!headerKeys.contains(k))
+                                    headerKeys.add(k);
+                            }
+
+                            java.nio.file.Path outPath = chosen.toPath();
+                            try (java.io.BufferedWriter w = java.nio.file.Files.newBufferedWriter(outPath,
+                                    java.nio.charset.StandardCharsets.UTF_8)) {
+                                // header
+                                for (int i = 0; i < headerKeys.size(); i++) {
+                                    if (i > 0)
+                                        w.write(',');
+                                    w.write('"');
+                                    w.write(headerKeys.get(i));
+                                    w.write('"');
+                                }
+                                w.write('\n');
+
+                                for (Map<String, String> row : participants) {
+                                    for (int i = 0; i < headerKeys.size(); i++) {
+                                        if (i > 0)
+                                            w.write(',');
+                                        String v = row.getOrDefault(headerKeys.get(i), "");
+                                        v = v.replace("\"", "\"\"");
+                                        w.write('"');
+                                        w.write(v);
+                                        w.write('"');
+                                    }
+                                    w.write('\n');
+                                }
+                            }
+
+                            Platform.runLater(() -> {
+                                Alert a = new Alert(Alert.AlertType.INFORMATION,
+                                        "Exported " + participants.size() + " row(s) to " + chosen.getName(),
+                                        ButtonType.OK);
+                                a.setHeaderText(null);
+                                a.showAndWait();
+                            });
+                        } catch (Exception ex) {
+                            ex.printStackTrace();
+                            final String em = ex.getMessage() != null ? ex.getMessage() : ex.toString();
+                            Platform.runLater(() -> {
+                                Alert a = new Alert(Alert.AlertType.ERROR, "Failed to write CSV: " + em, ButtonType.OK);
+                                a.setHeaderText(null);
+                                a.showAndWait();
+                            });
+                        }
+                    }, "write-csv-thread").start();
+                });
+            }, "fetch-participants-thread").start();
+        });
+
     }
 
     // --- Helper Method for Page Switching with Animation ---
