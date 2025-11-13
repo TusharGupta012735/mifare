@@ -963,16 +963,23 @@ public class Dashboard extends BorderPane {
                             }
 
                             // Build header/order
-                            List<String> headerKeys = new ArrayList<>(
-                                    Arrays.asList("FullName", "BSGUID", "ParticipationType", "bsgDistrict",
-                                            "Email", "phoneNumber", "bsgState", "memberType", "unitName",
-                                            "rank_or_section", "dateOfBirth", "age", "status", "CardUID"));
+                            // Determine header keys (use a fixed friendly order if possible)
+                            List<String> headerOrder = new ArrayList<>(Arrays.asList(
+                                    "FullName", "BSGUID", "ParticipationType", "bsgDistrict",
+                                    "Email", "phoneNumber", "bsgState", "memberType", "unitName",
+                                    "rank_or_section", "dateOfBirth", "age", "status", "CardUID"));
 
+                            // Add any other keys present in the returned map (preserve insertion order),
+                            // but ignore internal helper keys like "__CSV__"
                             Map<String, String> first = participants.get(0);
                             for (String k : first.keySet()) {
-                                if (!headerKeys.contains(k))
-                                    headerKeys.add(k);
+                                if ("__CSV__".equalsIgnoreCase(k))
+                                    continue; // skip helper column
+                                if (!headerOrder.contains(k))
+                                    headerOrder.add(k);
                             }
+
+                            List<String> headerKeys = headerOrder;
 
                             java.nio.file.Path outPath = chosen.toPath();
                             try (java.io.BufferedWriter w = java.nio.file.Files.newBufferedWriter(outPath,

@@ -325,7 +325,10 @@ public class AccessDb {
 
                         row.put("age", get2.apply("age", "AGE"));
 
-                        // CSV for NFC
+                        // also include status & CardUID if the ParticipantsRecord has them
+                        row.put("status", get2.apply("status", "STATUS"));
+                        row.put("CardUID", get2.apply("CardUID", "CARDUID"));
+                        
                         String csv = String.join(",",
                                 Arrays.asList(
                                         row.getOrDefault("FullName", ""),
