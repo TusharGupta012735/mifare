@@ -98,11 +98,11 @@ public class Dashboard extends BorderPane {
     }
 
     private static final boolean LOC_EVENT_CLASSPATH = false;
-    private static final String LOGO_PATH = "src/main/resources/logo-removebg-preview.png";
+    private static final String LOGO_PATH = "/logo-removebg-preview.png";
 
     private AttendanceView attendanceView;
 
-    // Make inputs/headings larger & cleaner without touching EntryForm code
+    // Make inputsw/headings larger & cleaner without touching EntryForm code
     private void prettifyForm(Parent root) {
         // TextFields
         for (Node n : root.lookupAll(".text-field")) {

@@ -4,15 +4,12 @@ import javafx.application.Platform;
 import javafx.geometry.Insets;
 import javafx.geometry.Pos;
 import javafx.scene.Parent;
-import javafx.scene.control.Label;
+import javafx.scene.control.*;
 import javafx.scene.image.Image;
 import javafx.scene.image.ImageView;
 import javafx.scene.layout.*;
 
 import java.io.BufferedReader;
-import java.io.File;
-import java.io.FileReader;
-import java.io.IOException;
 import java.time.LocalDate;
 import java.time.LocalTime;
 import java.time.format.DateTimeFormatter;
@@ -51,7 +48,8 @@ public class AttendanceView {
     private final Label bsguidValue;
     private final Label dateValue;
     private final Label timeValue;
-    private final Label locationValue;
+    // location is now a ComboBox
+    private final ComboBox<String> locationCombo;
     private final Label eventValue;
 
     // Keep references for dynamic font updates
@@ -71,9 +69,7 @@ public class AttendanceView {
 
         // 1) Update UID display immediately
         final String uidText = (rr.uid == null || rr.uid.isBlank()) ? "(no uid)" : rr.uid;
-        Platform.runLater(() -> {
-            getUidLabel().setText("UID: " + uidText);
-        });
+        Platform.runLater(() -> getUidLabel().setText("UID: " + uidText));
 
         // 2) Try to extract a payload string from common ReadResult fields
         String csv = null;
@@ -225,17 +221,24 @@ public class AttendanceView {
         timeValue = createValueLabel("(--:--)");
 
         Label headingLocation = createHeadingLabel("Location");
-        locationValue = createValueLabel("(unknown)");
+        // create combo box for location selection
+        locationCombo = new ComboBox<>();
+        locationCombo.setPromptText("Select room");
+        locationCombo.setPrefWidth(220); // default preferred width
+        locationCombo.setMinWidth(140); // don't shrink too small
+        locationCombo.setMaxWidth(320);
+        // initial style same as value labels — will be updated by adjustFontSizes
+        locationCombo.setStyle(String.format("-fx-font-size: %.1fpx;", BASE_VALUE_FONT));
 
         Label headingEvent = createHeadingLabel("Event");
         eventValue = createValueLabel("(unknown)");
 
-        // add rows
+        // add rows (use addDetailRow that accepts Node for value)
         addDetailRow(0, headingFullName, fullNameValue);
         addDetailRow(1, headingBsguid, bsguidValue);
         addDetailRow(2, headingDate, dateValue);
         addDetailRow(3, headingTime, timeValue);
-        addDetailRow(4, headingLocation, locationValue);
+        addDetailRowNode(4, headingLocation, locationCombo);
         addDetailRow(5, headingEvent, eventValue);
 
         // Style the details card container similar to top card (white rectangular card
@@ -257,6 +260,16 @@ public class AttendanceView {
         root.widthProperty().addListener((obs, oldW, newW) -> adjustFontSizes(newW.doubleValue()));
         // initial sizing
         adjustFontSizes(800); // reasonable default
+
+        // When user picks a location from combo, update the stored locationText
+        locationCombo.setOnAction(evt -> {
+            String sel = locationCombo.getValue();
+            if (sel == null || sel.isBlank()) {
+                locationText = "(unknown)";
+            } else {
+                locationText = sel.trim();
+            }
+        });
     }
 
     private Label createHeadingLabel(String text) {
@@ -281,8 +294,7 @@ public class AttendanceView {
         v.setWrapText(true);
         v.setAlignment(Pos.CENTER_LEFT);
         v.setPadding(new Insets(10, 12, 10, 12));
-        // unbold values (removed font-weight: 700) and default font-size via
-        // BASE_VALUE_FONT
+        // unbold values and default font-size via BASE_VALUE_FONT
         v.setStyle(String.format("""
                 -fx-text-fill: #263238;
                 -fx-font-size: %.1fpx;
@@ -294,6 +306,11 @@ public class AttendanceView {
     private void addDetailRow(int rowIndex, Label heading, Label value) {
         detailsGrid.add(heading, 0, rowIndex);
         detailsGrid.add(value, 1, rowIndex);
+    }
+
+    private void addDetailRowNode(int rowIndex, Label heading, javafx.scene.Node node) {
+        detailsGrid.add(heading, 0, rowIndex);
+        detailsGrid.add(node, 1, rowIndex);
     }
 
     // ---------------- public API (safe to call from any thread) ----------------
@@ -375,7 +392,7 @@ public class AttendanceView {
 
             // Also support location/event embedded in card CSV (optional)
             if (map.containsKey("location")) {
-                setLocation(map.get("location"));
+                setLocation(map.get("location")); // will set combo selection
             }
             if (map.containsKey("event")) {
                 setEvent(map.get("event"));
@@ -385,22 +402,17 @@ public class AttendanceView {
         // Fallback: simple CSV positional parsing
         if (parsedFullName == null || parsedBsguid == null) {
             String[] parts = normalized.split(",");
-            if (parts.length >= 1 && parsedFullName == null) {
+            if (parts.length >= 1 && parsedFullName == null)
                 parsedFullName = parts[0].trim();
-            }
-            if (parts.length >= 2 && parsedBsguid == null) {
+            if (parts.length >= 2 && parsedBsguid == null)
                 parsedBsguid = parts[1].trim();
-            }
-            // if card CSV includes location/event in positions 3/4 we won't assume here
         }
 
         // Sanitize BSGUID (remove all whitespace)
-        if (parsedBsguid != null) {
+        if (parsedBsguid != null)
             parsedBsguid = parsedBsguid.replaceAll("\\s+", "");
-        }
 
-        final String finalFullName = parsedFullName == null || parsedFullName.isBlank() ? "(empty)"
-                : parsedFullName;
+        final String finalFullName = parsedFullName == null || parsedFullName.isBlank() ? "(empty)" : parsedFullName;
         final String finalBsguid = parsedBsguid == null || parsedBsguid.isBlank() ? "(empty)" : parsedBsguid;
 
         // Set date/time to now
@@ -450,14 +462,13 @@ public class AttendanceView {
     }
 
     public void clearDetails() {
+        // Do not clear location selection (persist it)
         Platform.runLater(() -> {
             fullNameValue.setText("(empty)");
             bsguidValue.setText("(empty)");
             dateValue.setText("(--/--/----)");
             timeValue.setText("(--:--)");
-            // keep location/event intact if desired; earlier you asked to clear all —
-            // adjust as needed
-            locationValue.setText(locationValue.getText() == null ? "(unknown)" : locationValue.getText());
+            // keep locationCombo selection intact
             eventValue.setText(eventValue.getText() == null ? "(unknown)" : eventValue.getText());
         });
     }
@@ -479,78 +490,111 @@ public class AttendanceView {
         Platform.runLater(() -> timeValue.setText(text == null || text.isBlank() ? "(--:--)" : text));
     }
 
+    /**
+     * Set the location selection. If the combo has items and the value matches one,
+     * that item will be selected. If it doesn't match, it will be appended to the
+     * list and selected.
+     */
     public void setLocation(String text) {
-        locationText = (text == null || text.isBlank()) ? "(unknown)" : text;
-        Platform.runLater(() -> locationValue.setText(locationText));
+        final String resolved = (text == null || text.isBlank()) ? "(unknown)" : text.trim();
+        locationText = resolved;
+        Platform.runLater(() -> {
+            // try to match ignoring whitespace
+            if (resolved.equals("(unknown)")) {
+                // don't select anything
+                return;
+            }
+            Optional<String> match = locationCombo.getItems().stream()
+                    .filter(item -> item != null && item.trim().equalsIgnoreCase(resolved.trim())).findFirst();
+            if (match.isPresent()) {
+                locationCombo.setValue(match.get());
+            } else {
+                // add new item and select it
+                locationCombo.getItems().add(resolved);
+                locationCombo.setValue(resolved);
+            }
+        });
     }
 
     public void setEvent(String text) {
         eventText = (text == null || text.isBlank()) ? "(unknown)" : text;
         Platform.runLater(() -> eventValue.setText(eventText));
     }
-    
+
     public String getLocationText() {
-        return locationText;
+        // prefer Combo selection on FX thread; use volatile fallback otherwise
+        try {
+            if (Platform.isFxApplicationThread()) {
+                String v = locationCombo.getValue();
+                return (v == null || v.isBlank()) ? locationText : v;
+            } else {
+                return locationText;
+            }
+        } catch (Throwable t) {
+            return locationText;
+        }
     }
+
     public String getEventText() {
         return eventText;
     }
 
+    /**
+     * Load location/event from a file or classpath resource.
+     *
+     * Behavior:
+     * - Read first two non-empty lines.
+     * - If first non-empty line contains commas, treat it as a comma-separated list
+     * of room names and populate the ComboBox.
+     * - The second non-empty line (if present) becomes the event name.
+     *
+     * @param path      path or resource
+     * @param classpath if true, treat path as a classpath resource
+     */
     public void loadLocationEventFromFile(String path, boolean classpath) {
         if (path == null || path.isBlank()) {
-            setLocation(null);
-            setEvent(null);
+            // nothing — keep defaults
             return;
         }
 
-        String loc = null;
-        String ev = null;
-
+        List<String> nonEmpty = new ArrayList<>();
         if (classpath) {
             try (java.io.InputStream in = getClass().getResourceAsStream(path)) {
-                if (in == null) {
-                    // resource not found
-                    System.err.println("AttendanceView: resource not found: " + path);
-                } else {
-                    try (java.io.BufferedReader br = new java.io.BufferedReader(
+                if (in != null) {
+                    try (BufferedReader br = new BufferedReader(
                             new java.io.InputStreamReader(in, java.nio.charset.StandardCharsets.UTF_8))) {
-                        // read first two non-empty lines
                         String line;
-                        while ((line = br.readLine()) != null && (loc == null || ev == null)) {
+                        while ((line = br.readLine()) != null && nonEmpty.size() < 2) {
                             if (line == null)
                                 break;
                             line = line.trim();
                             if (line.isEmpty())
                                 continue;
-                            if (loc == null)
-                                loc = line;
-                            else if (ev == null)
-                                ev = line;
+                            nonEmpty.add(line);
                         }
                     }
+                } else {
+                    System.err.println("AttendanceView: resource not found: " + path);
                 }
             } catch (Exception ex) {
                 System.err.println("AttendanceView: failed to read classpath resource " + path + " : " + ex);
             }
         } else {
-            // load from normal filesystem path
             java.io.File f = new java.io.File(path);
             if (!f.exists() || !f.isFile()) {
                 System.err.println("AttendanceView: file not found: " + path);
             } else {
-                try (java.io.BufferedReader br = new java.io.BufferedReader(new java.io.InputStreamReader(
-                        new java.io.FileInputStream(f), java.nio.charset.StandardCharsets.UTF_8))) {
+                try (BufferedReader br = new BufferedReader(
+                        new java.io.InputStreamReader(new java.io.FileInputStream(f),
+                                java.nio.charset.StandardCharsets.UTF_8))) {
                     String line;
-                    while ((line = br.readLine()) != null && (loc == null || ev == null)) {
+                    while ((line = br.readLine()) != null && nonEmpty.size() < 2) {
                         if (line == null)
                             break;
                         line = line.trim();
                         if (line.isEmpty())
                             continue;
-                        if (loc == null)
-                            loc = line;
-                        else if (ev == null)
-                            ev = line;
+                        nonEmpty.add(line);
                     }
                 } catch (Exception ex) {
                     System.err.println("AttendanceView: failed to read file " + path + " : " + ex);
@@ -558,19 +602,64 @@ public class AttendanceView {
             }
         }
 
-        // apply results to UI (use default placeholders if missing)
-        final String finalLoc = (loc == null || loc.isBlank()) ? "(unknown)" : loc;
-        final String finalEv = (ev == null || ev.isBlank()) ? "(unknown)" : ev;
+        // Interpret results
+        String first = nonEmpty.size() >= 1 ? nonEmpty.get(0) : null;
+        String second = nonEmpty.size() >= 2 ? nonEmpty.get(1) : null;
+
+        final String finalEvent = (second == null || second.isBlank()) ? "(unknown)" : second;
 
         Platform.runLater(() -> {
-            setLocation(finalLoc);
-            setEvent(finalEv);
+            // Populate locationCombo
+            locationCombo.getItems().clear();
+            if (first != null && first.contains(",")) {
+                // comma-separated list
+                String[] parts = first.split(",");
+                for (String p : parts) {
+                    String t = p.trim();
+                    if (!t.isEmpty())
+                        locationCombo.getItems().add(t);
+                }
+            } else if (first != null && !first.isBlank()) {
+                // single room name
+                locationCombo.getItems().add(first.trim());
+            }
+
+            // If combo has items, ensure a selection: prefer existing persisted selection
+            // if present,
+            // otherwise pick the first item.
+            if (!locationCombo.getItems().isEmpty()) {
+                // if locationText matches an item, select that; otherwise select first
+                Optional<String> match = locationCombo.getItems().stream()
+                        .filter(item -> item != null && item.trim().equalsIgnoreCase(locationText.trim()))
+                        .findFirst();
+                if (match.isPresent()) {
+                    locationCombo.setValue(match.get());
+                } else {
+                    // choose previously persisted locationText if it is non-default and add it
+                    if (locationText != null && !"(unknown)".equals(locationText) && !locationText.isBlank()) {
+                        // make sure it's present
+                        if (locationCombo.getItems().stream().noneMatch(x -> x.equals(locationText))) {
+                            locationCombo.getItems().add(0, locationText);
+                        }
+                        locationCombo.setValue(locationText);
+                    } else {
+                        locationCombo.setValue(locationCombo.getItems().get(0));
+                        locationText = locationCombo.getItems().get(0);
+                    }
+                }
+            } else {
+                // no items: keep locationText as-is (maybe unknown)
+                locationCombo.setValue(null);
+            }
+
+            // set event label
+            setEvent(finalEvent);
         });
     }
 
     // ---------------- Dynamic font sizing ----------------
     private void adjustFontSizes(double availableWidth) {
-        // Decide a scale base on a baseline width (600 is chosen as a nice breakpoint)
+        // Decide a scale based on a baseline width (600 is chosen as a nice breakpoint)
         double baseWidth = 600.0;
         double scale = Math.max(0.6, Math.min(1.6, availableWidth / baseWidth));
 
@@ -581,17 +670,18 @@ public class AttendanceView {
                 "-fx-background-color: %s; -fx-text-fill: white; -fx-font-weight: 900; -fx-font-size: %.1fpx;",
                 HEADING_BG_COLOR, headingSize);
         final String valueStyleTemplate = String.format("-fx-text-fill: #263238; -fx-font-size: %.1fpx;", valueSize);
+        final String comboStyle = String.format("-fx-font-size: %.1fpx;", valueSize);
 
         // apply styles on FX thread
         Platform.runLater(() -> {
             for (Label h : headingLabels) {
-                // preserve padding/alignment etc. by only setting style; this replaces previous
-                // inline style
                 h.setStyle(headingStyleTemplate);
             }
             for (Label v : valueLabels) {
                 v.setStyle(valueStyleTemplate);
             }
+            // style combo too
+            locationCombo.setStyle(comboStyle);
         });
     }
 
