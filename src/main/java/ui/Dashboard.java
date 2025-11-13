@@ -1115,22 +1115,25 @@ public class Dashboard extends BorderPane {
             Thread.currentThread().setPriority(Thread.MIN_PRIORITY);
 
             while (attendancePollerRunning.get() && onAttendanceTab.get()) {
-                // 1) Wait indefinitely for a card
+                // WAIT FOR CARD (short-timeout polling so we can stop cooperatively)
                 SmartMifareReader.ReadResult rr = null;
                 try {
-                    rr = SmartMifareReader.readUIDWithData(0); // infinite wait
+                    // use a short timeout so the thread checks the running flag often
+                    rr = SmartMifareReader.readUIDWithData(PROBE_TIMEOUT_MS);
                 } catch (Throwable t) {
-                    // swallow & keep looping
+                    // swallow and continue if still running
+                    // if the error is fatal you may want to log it
+                    t.printStackTrace();
                 }
 
-                if (!attendancePollerRunning.get() || !onAttendanceTab.get())
+                if (!attendancePollerRunning.get() || !onAttendanceTab.get()) {
                     break;
+                }
 
                 if (rr != null && rr.uid != null && !rr.uid.isBlank()) {
-                    // Show UID immediately in UI
+                    // Process card present exactly like before
                     showUid(rr.uid);
 
-                    // Let the view parse payload / show name/bsguid etc.
                     if (attendanceView != null) {
                         try {
                             attendanceView.acceptReadResult(rr);
@@ -1144,14 +1147,34 @@ public class Dashboard extends BorderPane {
                     try {
                         String loc = (attendanceView != null ? attendanceView.getLocationText() : "(unknown)");
                         String ev = (attendanceView != null ? attendanceView.getEventText() : "(unknown)");
+
                         try {
+                            // IMPORTANT: AccessDb.getConnection() now synchronizes opening; keep this call
+                            // as-is
                             inserted = db.AccessDb.insertTrans(rr.uid, loc, ev); // returns 1 on success
-                        } catch (Throwable dbEx) {
-                            dbEx.printStackTrace();
-                            inserted = 0;
+                        } catch (Exception dbEx) {
+                            // Detect ClosedByInterruptException coming out of Jackcess and stop gracefully
+                            Throwable cause = dbEx;
+                            boolean isClosedByInterrupt = false;
+                            while (cause != null) {
+                                if (cause instanceof java.nio.channels.ClosedByInterruptException) {
+                                    isClosedByInterrupt = true;
+                                    break;
+                                }
+                                cause = cause.getCause();
+                            }
+                            if (isClosedByInterrupt) {
+                                // stop the poller cooperatively (DB open was interrupted)
+                                System.err.println("DB open was interrupted; stopping attendance poller gracefully.");
+                                attendancePollerRunning.set(false);
+                                inserted = 0;
+                                break;
+                            } else {
+                                dbEx.printStackTrace();
+                                inserted = 0;
+                            }
                         }
                     } finally {
-                        // update headline with short message (no popup)
                         if (inserted > 0) {
                             Platform.runLater(() -> {
                                 if (attendanceView != null) {
@@ -1181,24 +1204,21 @@ public class Dashboard extends BorderPane {
                     showRemovePrompt();
                     boolean absentConfirmed = SmartMifareReader.waitForCardAbsent(0); // 0 = wait forever
 
-                    // Reset UI for next card while preserving location/event if your view holds
-                    // them
                     if (attendancePollerRunning.get() && onAttendanceTab.get() && absentConfirmed) {
                         setAttendancePrompt();
                         if (attendanceView != null) {
-                            // clear transient fields (name/uid/date/time) but keep location/event
                             try {
                                 attendanceView.clearDetails();
                             } catch (Throwable ignored) {
                             }
                         }
                     }
-
                 } else {
-                    // timed out or error (shouldn't happen with 0), brief rest to avoid tight loop
+                    // no card seen in this short probe -> continue loop (no tight spin)
                     try {
-                        Thread.sleep(150);
-                    } catch (InterruptedException ex) {
+                        Thread.sleep(50);
+                    } catch (InterruptedException ie) {
+                        // don't propagate interrupt; just honour shutdown flag
                         Thread.currentThread().interrupt();
                         break;
                     }
@@ -1225,11 +1245,34 @@ public class Dashboard extends BorderPane {
         if (!attendancePollerRunning.get())
             return;
 
+        // tell the poller to stop
         attendancePollerRunning.set(false);
-        Thread t = attendancePollerThread;
-        attendancePollerThread = null;
-        if (t != null) {
-            t.interrupt();
+
+        // If your SmartMifareReader provides a cancel/unblock method, call it so
+        // readUIDWithData(0)
+        // will return quickly. We try reflectively to avoid compile-time dependency.
+        try {
+            java.lang.reflect.Method cancel = null;
+            try {
+                cancel = SmartMifareReader.class.getMethod("cancelWait");
+            } catch (NoSuchMethodException ignored) {
+                // try alternative method name used in some libs
+                try {
+                    cancel = SmartMifareReader.class.getMethod("close");
+                } catch (NoSuchMethodException ignored2) {
+                }
+            }
+            if (cancel != null) {
+                try {
+                    cancel.invoke(null); // assume static cancel; if instance method exists adjust accordingly
+                } catch (Throwable ignore) {
+                }
+            }
+        } catch (Throwable ignore) {
         }
+
+        // Do NOT interrupt the thread — let it finish its I/O and exit. Interrupting
+        // can close
+        // file channels used by Jackcess and lead to ClosedByInterruptException.
     }
 }

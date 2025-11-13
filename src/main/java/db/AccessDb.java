@@ -15,6 +15,10 @@ public class AccessDb {
     // Clear card assignment: set status='F' and remove CardUID for the given card
     // UID.
     // Returns number of rows updated (0 if none).
+
+    // in db.AccessDb (class body)
+    private static final Object DB_OPEN_LOCK = new Object();
+
     public static int clearCardAssignment(String cardUid) throws SQLException {
         if (cardUid == null || cardUid.trim().isEmpty())
             return 0;
@@ -183,9 +187,46 @@ public class AccessDb {
         } catch (IOException io) {
             throw new SQLException("Failed to provision seed DB: " + io.getMessage(), io);
         }
-        return DriverManager.getConnection(buildUrl(getWritableDbPath()));
-    }
 
+        final String url = buildUrl(getWritableDbPath());
+
+        synchronized (DB_OPEN_LOCK) {
+            boolean interrupted = Thread.interrupted(); // clear interrupt flag safely
+
+            try {
+                return DriverManager.getConnection(url);
+            } catch (SQLException ex) {
+                // Check if caused by ClosedByInterruptException (Jackcess got interrupted
+                // mid-open)
+                Throwable c = ex.getCause();
+                boolean wasInterrupted = false;
+                while (c != null) {
+                    if (c instanceof java.nio.channels.ClosedByInterruptException) {
+                        wasInterrupted = true;
+                        break;
+                    }
+                    c = c.getCause();
+                }
+
+                if (wasInterrupted) {
+                    System.err.println("[AccessDb] DB open interrupted! Retrying once...");
+
+                    // retry once after clearing interrupt flag
+                    try {
+                        return DriverManager.getConnection(url);
+                    } catch (SQLException retryEx) {
+                        throw retryEx; // give up after second failure
+                    }
+                }
+
+                throw ex; // normal SQL error
+            } finally {
+                // restore interrupt status if needed
+                if (interrupted)
+                    Thread.currentThread().interrupt();
+            }
+        }
+    }
     // Optional: handy to print where we’re writing
     public static Path getActiveDbPath() throws SQLException {
         try {
@@ -328,7 +369,7 @@ public class AccessDb {
                         // also include status & CardUID if the ParticipantsRecord has them
                         row.put("status", get2.apply("status", "STATUS"));
                         row.put("CardUID", get2.apply("CardUID", "CARDUID"));
-                        
+
                         String csv = String.join(",",
                                 Arrays.asList(
                                         row.getOrDefault("FullName", ""),

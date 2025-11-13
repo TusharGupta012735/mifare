@@ -60,7 +60,7 @@ public class AttendanceView {
     private static final DateTimeFormatter DATE_FMT = DateTimeFormatter.ofPattern("yyyy-MM-dd");
     private static final DateTimeFormatter TIME_FMT = DateTimeFormatter.ofPattern("HH:mm:ss");
 
-    // ---------------- ReadResult handling ----------------
+    // Replace existing acceptReadResult(...) with this improved version
     public void acceptReadResult(SmartMifareReader.ReadResult rr) {
         if (rr == null) {
             Platform.runLater(this::clearDetails);
@@ -71,10 +71,10 @@ public class AttendanceView {
         final String uidText = (rr.uid == null || rr.uid.isBlank()) ? "(no uid)" : rr.uid;
         Platform.runLater(() -> getUidLabel().setText("UID: " + uidText));
 
-        // 2) Try to extract a payload string from common ReadResult fields
+        // 2) Try to extract a payload string from common ReadResult fields (robust)
         String csv = null;
 
-        // direct known field: many ReadResult implementations expose 'data' or 'text'
+        // reflection: field 'data' or 'text'
         try {
             java.lang.reflect.Field f = rr.getClass().getField("data");
             Object val = f.get(rr);
@@ -93,7 +93,7 @@ public class AttendanceView {
             }
         }
 
-        // try getter methods
+        // reflection: getter getData() / getText()
         if ((csv == null || csv.isBlank())) {
             try {
                 java.lang.reflect.Method m = rr.getClass().getMethod("getData");
@@ -113,22 +113,69 @@ public class AttendanceView {
             }
         }
 
-        // last resort: toString()
+        // If still blank, inspect toString() (often contains "data=..." or "text=...")
         if ((csv == null || csv.isBlank())) {
             try {
-                csv = rr.toString();
+                String s = rr.toString();
+                if (s != null && !s.isBlank()) {
+                    // Try to extract data=... or text=... inside the toString output
+                    // Accept quoted or unquoted values; stop at comma or closing brace.
+                    java.util.regex.Pattern p = java.util.regex.Pattern
+                            .compile("(?:\\bdata\\b|\\btext\\b)\\s*=\\s*(\"([^\"]*)\"|([^,}\\]]+))",
+                                    java.util.regex.Pattern.CASE_INSENSITIVE);
+                    java.util.regex.Matcher m = p.matcher(s);
+                    if (m.find()) {
+                        String quoted = m.group(2);
+                        String unquoted = m.group(3);
+                        csv = (quoted != null) ? quoted : (unquoted != null ? unquoted.trim() : null);
+                    } else {
+                        // If no explicit data= found, but the toString looks like 'ReadResult{...}'
+                        // try to extract the first quoted block or the first key=value payload inside
+                        // braces.
+                        // First try anything inside braces
+                        int open = s.indexOf('{');
+                        int close = s.lastIndexOf('}');
+                        if (open >= 0 && close > open) {
+                            String inner = s.substring(open + 1, close);
+                            // If inner contains an equals sign, treat it as key=value pairs and let
+                            // updateFromCardCsv parse
+                            if (inner.contains("=")) {
+                                csv = inner.trim();
+                            } else {
+                                // otherwise try to find a quoted substring
+                                java.util.regex.Matcher q = java.util.regex.Pattern.compile("\"([^\"]+)\"")
+                                        .matcher(inner);
+                                if (q.find()) {
+                                    csv = q.group(1);
+                                } else {
+                                    // as a last resort, take the whole inner content if short
+                                    if (inner.length() < 512)
+                                        csv = inner.trim();
+                                }
+                            }
+                        }
+                    }
+                }
             } catch (Throwable ignored) {
             }
         }
 
-        // 3) If we got something that looks useful, parse it into fields
+        // 3) If we got something that looks useful, parse it into fields; otherwise
+        // just update time/date
         if (csv != null && !csv.isBlank()) {
-            // updateFromCardCsv already sets FullName, BSGUID, and date/time (it sets now)
+            // guard against accidental "__CSV__" like keys being used as the name
+            if ("__CSV__".equalsIgnoreCase(csv.trim())) {
+                // ignore as payload
+                csv = null;
+            }
+        }
+
+        if (csv != null && !csv.isBlank()) {
             updateFromCardCsv(csv);
         } else {
             // still update date/time even if we didn't get card payload
-            String nowDate = java.time.LocalDate.now().format(DateTimeFormatter.ofPattern("yyyy-MM-dd"));
-            String nowTime = java.time.LocalTime.now().format(DateTimeFormatter.ofPattern("HH:mm:ss"));
+            final String nowDate = java.time.LocalDate.now().format(DATE_FMT);
+            final String nowTime = java.time.LocalTime.now().format(TIME_FMT);
             Platform.runLater(() -> {
                 setDate(nowDate);
                 setTime(nowTime);
@@ -355,21 +402,56 @@ public class AttendanceView {
         setLogo(img);
     }
 
+    // Replace existing updateFromCardCsv(...) with this improved version
     public void updateFromCardCsv(String csv) {
         if (csv == null) {
             Platform.runLater(this::clearDetails);
             return;
         }
 
-        // Normalize
+        // Trim and normalize whitespace/newlines
         String normalized = csv.trim();
 
-        String parsedFullName = null;
-        String parsedBsguid = null;
+        // If the input looks like a wrapper "ReadResult{...}" extract inner part
+        if (normalized.startsWith("ReadResult") && normalized.contains("{") && normalized.contains("}")) {
+            int open = normalized.indexOf('{');
+            int close = normalized.lastIndexOf('}');
+            if (open >= 0 && close > open) {
+                normalized = normalized.substring(open + 1, close).trim();
+            }
+        }
 
-        // Try key=value parsing if looks like that
+        // If the string looks like JSON (starts with {) try simple JSON-ish parse (not
+        // full JSON lib)
+        if (normalized.startsWith("{") && normalized.endsWith("}")) {
+            // remove braces
+            String inner = normalized.substring(1, normalized.length() - 1);
+            Map<String, String> map = new LinkedHashMap<>();
+            for (String token : inner.split("[,\\n\\r]+")) {
+                if (!token.contains("=") && token.contains(":")) {
+                    // allow "key":"value" style
+                    String[] kv = token.split(":", 2);
+                    if (kv.length == 2) {
+                        String k = kv[0].replaceAll("[\"{}\\[\\]]", "").trim();
+                        String v = kv[1].replaceAll("[\"{}\\[\\]]", "").trim();
+                        map.put(k.toLowerCase(), v);
+                    }
+                } else if (token.contains("=")) {
+                    String[] kv = token.split("=", 2);
+                    String k = kv[0].replaceAll("[\"{}\\[\\]]", "").trim();
+                    String v = kv[1].replaceAll("[\"{}\\[\\]]", "").trim();
+                    map.put(k.toLowerCase(), v);
+                }
+            }
+            // Hand off to updateFromCardMap which sets appropriate UI
+            if (!map.isEmpty()) {
+                updateFromCardMap(map);
+                return;
+            }
+        }
+
+        // If it contains key=value pairs separated by commas/newlines, parse into map
         if (normalized.contains("=")) {
-            // Split on commas or newlines
             String[] tokens = normalized.split("[,\\r\\n]+");
             Map<String, String> map = new HashMap<>();
             for (String t : tokens) {
@@ -377,49 +459,51 @@ public class AttendanceView {
                 if (kv.length == 2) {
                     String k = kv[0].trim();
                     String v = kv[1].trim();
+                    // strip surrounding quotes if present
+                    if (v.length() >= 2 && ((v.startsWith("\"") && v.endsWith("\""))
+                            || (v.startsWith("'") && v.endsWith("'")))) {
+                        v = v.substring(1, v.length() - 1);
+                    }
                     map.put(k.toLowerCase(), v);
                 }
             }
-            if (map.containsKey("fullname"))
-                parsedFullName = map.get("fullname");
-            if (map.containsKey("bsguid"))
-                parsedBsguid = map.get("bsguid");
-            // also try common alternatives
-            if (parsedFullName == null && map.containsKey("name"))
-                parsedFullName = map.get("name");
-            if (parsedBsguid == null && map.containsKey("id"))
-                parsedBsguid = map.get("id");
-
-            // Also support location/event embedded in card CSV (optional)
-            if (map.containsKey("location")) {
-                setLocation(map.get("location")); // will set combo selection
-            }
-            if (map.containsKey("event")) {
-                setEvent(map.get("event"));
+            if (!map.isEmpty()) {
+                updateFromCardMap(map);
+                return;
             }
         }
 
-        // Fallback: simple CSV positional parsing
-        if (parsedFullName == null || parsedBsguid == null) {
-            String[] parts = normalized.split(",");
-            if (parts.length >= 1 && parsedFullName == null)
-                parsedFullName = parts[0].trim();
-            if (parts.length >= 2 && parsedBsguid == null)
-                parsedBsguid = parts[1].trim();
+        // If it looks like quoted string "first,last,..." extract inside quotes
+        java.util.regex.Matcher quoted = java.util.regex.Pattern.compile("^\\s*\"([^\"]+)\"\\s*$")
+                .matcher(normalized);
+        if (quoted.find()) {
+            normalized = quoted.group(1);
         }
 
-        // Sanitize BSGUID (remove all whitespace)
-        if (parsedBsguid != null)
+        // Now fallback to simple positional CSV parsing (first -> fullname, second ->
+        // bsguid)
+        String[] parts = normalized.split("[,\\r\\n]+");
+        String parsedFullName = null;
+        String parsedBsguid = null;
+
+        if (parts.length >= 1) {
+            parsedFullName = parts[0].trim();
+        }
+        if (parts.length >= 2) {
+            parsedBsguid = parts[1].trim();
+        }
+
+        // sanitize
+        if (parsedBsguid != null) {
             parsedBsguid = parsedBsguid.replaceAll("\\s+", "");
+        }
 
-        final String finalFullName = parsedFullName == null || parsedFullName.isBlank() ? "(empty)" : parsedFullName;
-        final String finalBsguid = parsedBsguid == null || parsedBsguid.isBlank() ? "(empty)" : parsedBsguid;
-
-        // Set date/time to now
+        final String finalFullName = (parsedFullName == null || parsedFullName.isBlank()) ? "(empty)"
+                : parsedFullName;
+        final String finalBsguid = (parsedBsguid == null || parsedBsguid.isBlank()) ? "(empty)" : parsedBsguid;
         final String nowDate = LocalDate.now().format(DATE_FMT);
         final String nowTime = LocalTime.now().format(TIME_FMT);
 
-        // Update UI
         Platform.runLater(() -> {
             fullNameValue.setText(finalFullName);
             bsguidValue.setText(finalBsguid);
