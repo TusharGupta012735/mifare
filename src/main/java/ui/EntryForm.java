@@ -580,6 +580,8 @@ public class EntryForm {
             BiConsumer<Map<String, String>, Consumer<Boolean>> onSave,
             List<Map<String, String>> batchRows) {
 
+        util.DebugLog.d("createBatch() start; rows=%d", batchRows == null ? 0 : batchRows.size());
+
         BorderPane root = new BorderPane();
         root.setPadding(new Insets(14));
         root.setStyle("-fx-background-color: linear-gradient(to bottom, #ffffff, #f7f9fb);");
@@ -653,7 +655,6 @@ public class EntryForm {
         // --- Center layout (status moved to TOP) ---
         VBox center = new VBox(8, statusWrap, columns, controls);
         center.setPadding(new Insets(10));
-        root.setCenter(center);
 
         final int total = batchRows == null ? 0 : batchRows.size();
         final int[] index = new int[] { 0 };
@@ -672,6 +673,7 @@ public class EntryForm {
         };
 
         Runnable fillCurrent = () -> {
+            util.DebugLog.d("fillCurrent: idx=%d total=%d", index[0], total);
             if (index[0] < 0 || index[0] >= total) {
                 fullName.clear();
                 bsguid.clear();
@@ -740,16 +742,39 @@ public class EntryForm {
                     " — Present card and click Write & Next.");
         }
 
+        StackPane overlay = new StackPane();
+        overlay.setVisible(false); // hidden by default
+        overlay.setPickOnBounds(true); // intercept mouse events so background is blocked
+
+        // semi-transparent background to dim UI
+        overlay.setStyle("-fx-background-color: rgba(132, 132, 132, 0.04); -fx-background-radius: 10;");
+
+        // spinner + message
+        VBox loaderBox = new VBox(10);
+        loaderBox.setAlignment(Pos.CENTER);
+
+        ProgressIndicator spinner = new ProgressIndicator();
+        spinner.setMaxSize(72, 72);
+
+        loaderBox.getChildren().addAll(spinner);
+        overlay.getChildren().add(loaderBox);
+        StackPane.setAlignment(loaderBox, Pos.CENTER);
+
+        StackPane centerStack = new StackPane(center, overlay);
+        centerStack.setPadding(new Insets(10));
+        root.setCenter(centerStack);
+
         writeNextBtn.setOnAction(evt -> {
+            util.DebugLog.d("Write button clicked; running=%b idx=%d", running[0], index[0]);
             if (!running[0])
                 return;
             if (index[0] < 0 || index[0] >= total) {
                 status.setText("No more rows.");
+                util.DebugLog.d("No more rows");
                 return;
             }
             Map<String, String> cur = batchRows.get(index[0]);
 
-            // Build map for AccessDb.insertAttendee (canonical keys!)
             Map<String, String> data = new LinkedHashMap<>();
             String fn = pick.apply(cur, "FullName");
             String bs = pick.apply(cur, "BSGUID");
@@ -792,48 +817,151 @@ public class EntryForm {
             writeNextBtn.setDisable(true);
             skipBtn.setDisable(true);
             stopBtn.setDisable(true);
+
+            // --- STOP any running NFC auto-fill poller to avoid device contention ---
+            Object svcObj = root.getProperties().get("nfc-poller");
+            java.util.concurrent.ScheduledExecutorService savedSvc = svcObj instanceof java.util.concurrent.ScheduledExecutorService
+                    ? (java.util.concurrent.ScheduledExecutorService) svcObj
+                    : null;
+            if (savedSvc != null) {
+                util.DebugLog.d("Stopping nfc-poller before write (idx=%d).", index[0]);
+                try {
+                    // best-effort shutdown
+                    savedSvc.shutdownNow();
+                    // remove property so other code knows poller is stopped
+                    root.getProperties().remove("nfc-poller");
+                    // wait briefly for tasks to die (non-blocking; short wait)
+                    try {
+                        savedSvc.awaitTermination(250, java.util.concurrent.TimeUnit.MILLISECONDS);
+                    } catch (InterruptedException ie) {
+                        Thread.currentThread().interrupt();
+                    }
+                } catch (Throwable t) {
+                    util.DebugLog.ex(t, "Error shutting down nfc-poller:");
+                }
+            }
+
+            overlay.setVisible(true);
+            util.DebugLog.d("Overlay visible -> true (starting write). idx=%d", index[0]);
+
             status.setText("Writing record " + (index[0] + 1) + " / " + total + " — present card now...");
 
-            // NEW: success/failure finisher
-            Consumer<Boolean> finish = success -> Platform.runLater(() -> {
-                if (success) {
-                    index[0]++;
-                    if (!running[0] || index[0] >= total) {
-                        status.setText("Batch finished. Processed " + Math.min(total, index[0]) + " rows.");
-                        writeNextBtn.setDisable(true);
-                        skipBtn.setDisable(true);
-                        stopBtn.setDisable(true);
-                        return;
+            Consumer<Boolean> finish = success -> {
+                util.DebugLog.d("finish called for idx=%d success=%b", index[0], success);
+                Platform.runLater(() -> {
+                    overlay.setVisible(false);
+                    util.DebugLog.d("Overlay visible -> false (finished). idx=%d success=%b", index[0], success);
+
+                    // Attempt to restart poller if we had one before; give driver a tiny settle
+                    // delay.
+                    if (savedSvc != null) {
+                        util.DebugLog.d("Waiting briefly (200ms) before restarting nfc-poller.");
+                        // spawn a short background task to restart without blocking FX
+                        new Thread(() -> {
+                            try {
+                                Thread.sleep(200);
+                            } catch (InterruptedException ie) {
+                                Thread.currentThread().interrupt();
+                            }
+                            try {
+                                util.DebugLog.d("Restarting nfc-poller after write (idx=%d).", index[0]);
+                                java.util.concurrent.ScheduledExecutorService newSvc = startNfcAutoFill(root,
+                                        fullName, bsguid, participationType,
+                                        bsgDistrict, email, phoneNumber,
+                                        bsgState, memberTyp, unitNam,
+                                        rank_or_section, dateOfBirth, age,
+                                        false,
+                                        1200);
+                                if (newSvc != null) {
+                                    root.getProperties().put("nfc-poller", newSvc);
+                                    util.DebugLog.d("nfc-poller restarted successfully.");
+                                } else {
+                                    util.DebugLog.d("startNfcAutoFill returned null; nfc-poller not restarted.");
+                                }
+                            } catch (Throwable t) {
+                                util.DebugLog.ex(t, "Failed to restart nfc-poller:");
+                            }
+                        }, "nfc-restart-thread").start();
                     }
-                    fillCurrent.run();
-                    status.setText("Ready for record " + (index[0] + 1) + " / " + total
-                            + " — Present card and click Write & Next.");
-                } else {
-                    // stay on same record
-                    status.setText("Write failed. Present the card again and click Write & Next.");
-                }
-                // Re-enable controls for next action (both cases)
-                writeNextBtn.setDisable(false);
-                skipBtn.setDisable(false);
-                stopBtn.setDisable(false);
-            });
+
+                    if (success) {
+                        index[0]++;
+                        if (!running[0] || index[0] >= total) {
+                            status.setText("Batch finished. Processed " + Math.min(total, index[0]) + " rows.");
+                            writeNextBtn.setDisable(true);
+                            skipBtn.setDisable(true);
+                            stopBtn.setDisable(true);
+                            util.DebugLog.d("Batch finished. processed=%d", index[0]);
+                            return;
+                        }
+                        fillCurrent.run();
+                        status.setText("Ready for record " + (index[0] + 1) + " / " + total
+                                + " — Present card and click Write & Next.");
+                        util.DebugLog.d("Ready for next record idx=%d", index[0]);
+                    } else {
+                        // stay on same record
+                        status.setText("Write failed. Present the card again and click Write & Next.");
+                        util.DebugLog.d("Write failed; staying on idx=%d", index[0]);
+                    }
+                    // Re-enable controls for next action (both cases)
+                    writeNextBtn.setDisable(false);
+                    skipBtn.setDisable(false);
+                    stopBtn.setDisable(false);
+                });
+            };
 
             try {
+                util.DebugLog.d("onSave.accept() about to be called for idx=%d", index[0]);
                 if (onSave != null) {
-                    onSave.accept(data, finish);
+                    long before = System.nanoTime();
+                    onSave.accept(data, success -> {
+                        long durMs = (System.nanoTime() - before) / 1_000_000L;
+                        util.DebugLog.d("onSave callback completed (idx=%d) duration=%dms -> result=%b", index[0],
+                                durMs, success);
+                        finish.accept(success);
+                    });
                 } else {
-                    // No handler → treat as success to allow stepping through
+                    util.DebugLog.d("onSave is null; auto-marking success for idx=%d", index[0]);
                     finish.accept(true);
                 }
             } catch (Exception ex) {
+                util.DebugLog.ex(ex, "Exception while calling onSave for idx=%d", index[0]);
+                // hide overlay and re-enable UI on error
+                overlay.setVisible(false);
                 status.setText("Write failed: " + ex.getMessage());
                 writeNextBtn.setDisable(false);
                 skipBtn.setDisable(false);
                 stopBtn.setDisable(false);
+
+                // ensure poller restarted if needed
+                if (savedSvc != null) {
+                    new Thread(() -> {
+                        try {
+                            Thread.sleep(200);
+                        } catch (InterruptedException ie) {
+                            Thread.currentThread().interrupt();
+                        }
+                        try {
+                            java.util.concurrent.ScheduledExecutorService newSvc = startNfcAutoFill(root,
+                                    fullName, bsguid, participationType,
+                                    bsgDistrict, email, phoneNumber,
+                                    bsgState, memberTyp, unitNam,
+                                    rank_or_section, dateOfBirth, age,
+                                    false,
+                                    1200);
+                            if (newSvc != null) {
+                                root.getProperties().put("nfc-poller", newSvc);
+                            }
+                        } catch (Throwable t) {
+                            util.DebugLog.ex(t, "Failed to restart nfc-poller after exception:");
+                        }
+                    }, "nfc-restart-on-error").start();
+                }
             }
         });
 
         skipBtn.setOnAction(evt -> {
+            util.DebugLog.d("Skip clicked; current idx=%d", index[0]);
             if (!running[0])
                 return;
             index[0]++;
@@ -844,10 +972,12 @@ public class EntryForm {
             } else {
                 fillCurrent.run();
                 status.setText("Skipped. Now at " + (index[0] + 1) + " / " + total);
+                util.DebugLog.d("Now at idx=%d after skip", index[0]);
             }
         });
 
         stopBtn.setOnAction(evt -> {
+            util.DebugLog.d("Stop clicked at idx=%d", index[0]);
             running[0] = false;
             status.setText("Batch stopped by user. Processed " + index[0] + " rows.");
             writeNextBtn.setDisable(true);
@@ -865,7 +995,12 @@ public class EntryForm {
                 1200);
         if (svc != null) {
             root.getProperties().put("nfc-poller", svc);
+            util.DebugLog.d("NFC auto-fill poller started (svc != null)");
+        } else {
+            util.DebugLog.d("NFC auto-fill poller not started (svc == null)");
         }
+
+        util.DebugLog.d("createBatch() end; ready for interaction");
         return root;
     }
 
