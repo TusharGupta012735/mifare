@@ -1,6 +1,7 @@
 package ui;
 
 import java.io.IOException;
+import java.sql.SQLException;
 import java.util.*;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.stream.Collectors;
@@ -8,6 +9,7 @@ import java.util.stream.Collectors;
 import db.AccessDb;
 import nfc.SmartMifareReader;
 import nfc.SmartMifareWriter;
+import util.DebugLog;
 import javafx.application.Platform;
 import javafx.scene.Parent;
 
@@ -211,6 +213,12 @@ public class Dashboard extends BorderPane {
     private final StackPane contentArea = new StackPane();
 
     public Dashboard() {
+
+        try {
+            DebugLog.d("Active DB path: %s", db.AccessDb.getActiveDbPath());
+        } catch (SQLException e) {
+            e.printStackTrace();
+        }
         // --- Buttons ---
         Button attendanceBtn = new Button("Attendance");
         Button entryFormBtn = new Button("Entry Form");
@@ -278,13 +286,58 @@ public class Dashboard extends BorderPane {
 
         // --- Actions ---
         attendanceBtn.setOnAction(e -> {
+            // log the user's action
+            DebugLog.d("Attendance button clicked - switching to Attendance tab");
+
+            // 1) request we are no longer on attendance tab (helps poller exit quickly)
+            onAttendanceTab.set(false);
+
+            // 2) stop existing poller (if any) and wait a short time for it to die
+            try {
+                DebugLog.d("Stopping existing attendance poller (if running)...");
+                stopAttendancePoller(); // should request stop and attempt to cancel blocking read
+
+                Thread t = attendancePollerThread;
+                if (t != null && t.isAlive()) {
+                    DebugLog.d("Waiting for poller thread to terminate (join up to 2000ms)...");
+                    try {
+                        t.join(2000); // wait up to 2s for previous poller to exit
+                    } catch (InterruptedException ie) {
+                        Thread.currentThread().interrupt();
+                        DebugLog.d("Interrupted while waiting for poller thread to join");
+                    }
+                    DebugLog.d("Poller thread alive after join=%b", t.isAlive());
+                }
+            } catch (Throwable stopEx) {
+                DebugLog.ex(stopEx, "Error while stopping previous attendance poller");
+            }
+
+            // 3) mark we are on attendance tab and create fresh AttendanceView
             onAttendanceTab.set(true);
-            attendanceView = new AttendanceView(); // create new instance
-            attendanceView.setLogo(LOGO_PATH);
-            setContent(attendanceView.getView());
-            java.nio.file.Path writableLocReload = ensureWritableLocationFilePresent();
-            attendanceView.loadLocationEventFromFile(writableLocReload.toString(), false);
-            startAttendancePoller();
+            try {
+                DebugLog.d("Creating new AttendanceView instance");
+                attendanceView = new AttendanceView(); // create new instance
+                attendanceView.setLogo(LOGO_PATH);
+                setContent(attendanceView.getView());
+
+                // load location/event (writable copy) and start poller
+                java.nio.file.Path writableLocReload = ensureWritableLocationFilePresent();
+                attendanceView.loadLocationEventFromFile(writableLocReload.toString(), false);
+
+                DebugLog.d("Starting attendance poller");
+                startAttendancePoller();
+                DebugLog.d("Attendance tab ready (poller started)");
+            } catch (Throwable initEx) {
+                DebugLog.ex(initEx, "Failed to initialize Attendance tab");
+                // best-effort fallback: still try to start poller if partial init succeeded
+                try {
+                    if (!attendancePollerRunning.get()) {
+                        startAttendancePoller();
+                    }
+                } catch (Throwable t2) {
+                    DebugLog.ex(t2, "Failed to start poller after initialization failure");
+                }
+            }
         });
 
         // --- Entry Form ---

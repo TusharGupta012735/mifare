@@ -3,6 +3,9 @@ package db;
 import java.sql.*;
 import java.time.Instant;
 import java.util.*;
+
+import util.DebugLog;
+
 import java.io.InputStream;
 import java.io.IOException;
 import java.io.FileNotFoundException;
@@ -227,6 +230,7 @@ public class AccessDb {
             }
         }
     }
+
     // Optional: handy to print where we’re writing
     public static Path getActiveDbPath() throws SQLException {
         try {
@@ -1102,53 +1106,122 @@ public class AccessDb {
         if (cardUid == null || cardUid.trim().isEmpty())
             return 0;
 
-        // Normalize UID: remove colons, dashes, spaces, make uppercase
-        String uid = cardUid.replaceAll("[^A-Za-z0-9]", "").toUpperCase();
-
-        String fullName = null;
-        String bsguid = null;
+        // Normalize UID: remove non-alnum and uppercase (same normalization used
+        // elsewhere)
+        String uid = cardUid.replaceAll("[^A-Za-z0-9]", "").toUpperCase(Locale.ROOT);
 
         String dateTime = java.time.LocalDateTime.now()
                 .format(java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss"));
 
-        try (Connection c = getConnection()) {
+        util.DebugLog.d("insertTrans called: rawCardUid='%s', normalizedUid='%s', location='%s', event='%s'",
+                cardUid, uid, location, eventName);
 
-            // Check if registered (normalize CardUID column the same way!)
+        try (Connection c = getConnection()) {
+            // Diagnostic: print active DB path & JDBC URL (helps ensure we inspect correct
+            // file)
+            try {
+                java.nio.file.Path active = getActiveDbPath();
+                util.DebugLog.d("Active DB path: %s", active == null ? "(null)" : active.toAbsolutePath());
+            } catch (Throwable t) {
+                util.DebugLog.ex(t, "getActiveDbPath() failed (ignored)");
+            }
+            try {
+                String url = c.getMetaData() != null ? c.getMetaData().getURL() : null;
+                util.DebugLog.d("JDBC Connection URL: %s", url == null ? "(null)" : url);
+            } catch (Throwable ignore) {
+            }
+
+            String fullName = null;
+            String bsguid = null;
+
+            // Lookup participant by normalized CardUID (same normalization logic as
+            // elsewhere)
             String sel = """
-                        SELECT TOP 1 [FullName],[BSGUID]
-                        FROM [ParticipantsRecord]
-                        WHERE UCASE(REPLACE(REPLACE(REPLACE(TRIM([CardUID]), ':', ''), '-', ''), ' ', '')) = ?
+                    SELECT TOP 1 [FullName], [BSGUID]
+                    FROM [ParticipantsRecord]
+                    WHERE UCASE(REPLACE(REPLACE(REPLACE(TRIM([CardUID]), ':', ''), '-', ''), ' ', '')) = ?
                     """;
 
+            util.DebugLog.d("Running participant lookup for normalizedUid='%s'", uid);
             try (PreparedStatement ps = c.prepareStatement(sel)) {
                 ps.setString(1, uid);
                 try (ResultSet rs = ps.executeQuery()) {
                     if (rs.next()) {
                         fullName = rs.getString("FullName");
-                        bsguid = rs.getString("BSGUID");
+                        bsguid = rs.getString("BSGUID"); // may be null or empty — that's acceptable
+                        util.DebugLog.d("Participant lookup success for uid='%s' -> fullName='%s', bsguid='%s'",
+                                uid, fullName, bsguid);
+                    } else {
+                        util.DebugLog.d("Participant lookup: NO ROW for uid='%s' -> will NOT insert trans", uid);
+                        return 0; // card must exist in ParticipantsRecord; do not insert otherwise
                     }
                 }
+            } catch (SQLException se) {
+                util.DebugLog.ex(se, "SQL error during participant lookup for uid='%s'", uid);
+                throw se;
             }
 
-            // Not registered → do not insert → UI will show "Card not registered"
-            if (bsguid == null || bsguid.isBlank())
-                return 0;
-
-            // Insert into trans
+            // Prepare insert into trans — allow bsguid to be NULL if missing
             String ins = """
-                        INSERT INTO [trans] ([carduid],[bsguid],[fullname],[date_time],[location],[event])
-                        VALUES (?,?,?,?,?,?)
+                    INSERT INTO [trans] ([carduid],[bsguid],[fullname],[date_time],[location],[event])
+                    VALUES (?,?,?,?,?,?)
                     """;
 
+            util.DebugLog.d("Preparing trans INSERT SQL: %s", ins.replace("\n", " "));
+
             try (PreparedStatement ps = c.prepareStatement(ins)) {
-                ps.setString(1, uid); // already normalized
-                ps.setString(2, bsguid);
-                ps.setString(3, fullName);
+                ps.setString(1, uid); // normalized carduid
+                if (bsguid == null || bsguid.isBlank()) {
+                    ps.setNull(2, java.sql.Types.VARCHAR);
+                } else {
+                    ps.setString(2, bsguid);
+                }
+                String nameToInsert = (fullName == null || fullName.isBlank()) ? "(unknown)" : fullName;
+                ps.setString(3, nameToInsert);
                 ps.setString(4, dateTime);
                 ps.setString(5, location);
                 ps.setString(6, eventName);
-                return ps.executeUpdate(); // returns 1 on success
+
+                util.DebugLog.d("Executing trans INSERT for uid='%s' (bsguid=%s, fullname='%s', date_time='%s')",
+                        uid, (bsguid == null ? "NULL" : bsguid), nameToInsert, dateTime);
+
+                int affected = ps.executeUpdate();
+                util.DebugLog.d("Trans INSERT affected=%d for uid='%s'", affected, uid);
+
+                // Verification: immediate SELECT on same connection to confirm visibility
+                try {
+                    String verifySql = "SELECT COUNT(*) FROM [trans] WHERE [carduid]=? AND [date_time]=?";
+                    try (PreparedStatement vps = c.prepareStatement(verifySql)) {
+                        vps.setString(1, uid);
+                        vps.setString(2, dateTime);
+                        try (ResultSet vrs = vps.executeQuery()) {
+                            if (vrs.next()) {
+                                long count = vrs.getLong(1);
+                                util.DebugLog.d(
+                                        "Verification SELECT found %d row(s) for uid='%s' date_time='%s' on same connection",
+                                        count, uid, dateTime);
+                            } else {
+                                util.DebugLog.d(
+                                        "Verification SELECT returned no rows for uid='%s' date_time='%s' (no result row)",
+                                        uid, dateTime);
+                            }
+                        }
+                    }
+                } catch (Throwable vt) {
+                    util.DebugLog.ex(vt, "Verification SELECT failed after INSERT for uid='%s'", uid);
+                }
+
+                return affected;
+            } catch (SQLException se) {
+                util.DebugLog.ex(se, "SQL error during trans INSERT for uid='%s'", uid);
+                throw se;
             }
+        } catch (SQLException ex) {
+            util.DebugLog.ex(ex, "insertTrans failed for uid='%s' (SQLException)", uid);
+            throw ex;
+        } catch (Exception ex) {
+            util.DebugLog.ex(ex, "insertTrans unexpected exception for uid='%s'", uid);
+            throw new SQLException("insertTrans unexpected error: " + ex.getMessage(), ex);
         }
     }
 
