@@ -1,6 +1,7 @@
 helper\Res.class
 nfc\SmartMifareWriter$BlockAuth.class
 ui\EntryForm.class
+util\DebugLog.class
 util\CsvReader.class
 ui\BatchFilterDialog$Result.class
 ui\ExcelImportDialog$1.class
