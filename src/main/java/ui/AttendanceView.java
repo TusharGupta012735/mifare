@@ -48,7 +48,7 @@ public class AttendanceView {
     private final Label bsguidValue;
     private final Label dateValue;
     private final Label timeValue;
-    // location is now a ComboBox
+    // location is a ComboBox
     private final ComboBox<String> locationCombo;
     private final Label eventValue;
 
@@ -255,6 +255,20 @@ public class AttendanceView {
         detailsGrid.getColumnConstraints().addAll(colLeft, colRight);
 
         // helper to create heading cells and value cells (increased font sizes)
+        // Create Event and Location first so they appear at the top of the bottom list
+        Label headingEvent = createHeadingLabel("Event");
+        eventValue = createValueLabel("(unknown)");
+
+        Label headingLocation = createHeadingLabel("Location");
+        // create combo box for location selection (now placed in details grid at top)
+        locationCombo = new ComboBox<>();
+        locationCombo.setPromptText("Select room");
+        locationCombo.setPrefWidth(220); // default preferred width
+        locationCombo.setMinWidth(140); // don't shrink too small
+        locationCombo.setMaxWidth(320);
+        // initial style same as value labels — will be updated by adjustFontSizes
+        locationCombo.setStyle(String.format("-fx-font-size: %.1fpx;", BASE_VALUE_FONT));
+
         Label headingFullName = createHeadingLabel("Full Name");
         fullNameValue = createValueLabel("(empty)");
 
@@ -267,26 +281,13 @@ public class AttendanceView {
         Label headingTime = createHeadingLabel("Time");
         timeValue = createValueLabel("(--:--)");
 
-        Label headingLocation = createHeadingLabel("Location");
-        // create combo box for location selection
-        locationCombo = new ComboBox<>();
-        locationCombo.setPromptText("Select room");
-        locationCombo.setPrefWidth(220); // default preferred width
-        locationCombo.setMinWidth(140); // don't shrink too small
-        locationCombo.setMaxWidth(320);
-        // initial style same as value labels — will be updated by adjustFontSizes
-        locationCombo.setStyle(String.format("-fx-font-size: %.1fpx;", BASE_VALUE_FONT));
-
-        Label headingEvent = createHeadingLabel("Event");
-        eventValue = createValueLabel("(unknown)");
-
-        // add rows (use addDetailRow that accepts Node for value)
-        addDetailRow(0, headingFullName, fullNameValue);
-        addDetailRow(1, headingBsguid, bsguidValue);
-        addDetailRow(2, headingDate, dateValue);
-        addDetailRow(3, headingTime, timeValue);
-        addDetailRowNode(4, headingLocation, locationCombo);
-        addDetailRow(5, headingEvent, eventValue);
+        // add rows: event and location first (rows 0 & 1), then other details
+        addDetailRow(0, headingEvent, eventValue);
+        addDetailRowNode(1, headingLocation, locationCombo);
+        addDetailRow(2, headingFullName, fullNameValue);
+        addDetailRow(3, headingBsguid, bsguidValue);
+        addDetailRow(4, headingDate, dateValue);
+        addDetailRow(5, headingTime, timeValue);
 
         // Style the details card container similar to top card (white rectangular card
         // + shadow)

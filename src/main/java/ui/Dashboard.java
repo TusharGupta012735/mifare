@@ -25,6 +25,8 @@ import javafx.scene.paint.Color;
 
 public class Dashboard extends BorderPane {
 
+    private final ScrollPane scrollPane = new ScrollPane();
+
     // >>> Attendance poller state (runs ONLY on Attendance tab)
     private volatile Thread attendancePollerThread = null;
     private final AtomicBoolean attendancePollerRunning = new AtomicBoolean(false);
@@ -282,7 +284,32 @@ public class Dashboard extends BorderPane {
 
         // --- Add Components to Layout ---
         setTop(navBar);
-        setCenter(contentArea);
+
+        // Wrap the content area in the scroll pane so all pages become scrollable when
+        // needed
+        scrollPane.setContent(contentArea);
+        scrollPane.setFitToWidth(true); // pages will stretch to viewport width (nice wrapping)
+        scrollPane.setFitToHeight(false); // allow vertical scrolling
+        scrollPane.setHbarPolicy(ScrollPane.ScrollBarPolicy.NEVER);
+        scrollPane.setVbarPolicy(ScrollPane.ScrollBarPolicy.AS_NEEDED);
+        scrollPane.setPannable(true); // enable touch / drag panning
+        scrollPane.setPadding(new Insets(6));
+
+        // Keep the contentArea width in sync with the viewport so children wrap
+        // correctly.
+        // When the viewport changes size update contentArea's maxWidth so layout uses
+        // it.
+        scrollPane.viewportBoundsProperty().addListener((obs, oldB, newB) -> {
+            if (newB != null) {
+                double vw = Math.max(0, newB.getWidth() - 2); // small guard padding
+                // allow contentArea to grow up to viewport width
+                contentArea.setMaxWidth(vw);
+                // also prefer to fill horizontally
+                contentArea.setPrefWidth(vw);
+            }
+        });
+
+        setCenter(scrollPane);
 
         // --- Actions ---
         attendanceBtn.setOnAction(e -> {
@@ -1123,7 +1150,26 @@ public class Dashboard extends BorderPane {
             EntryForm.stopNfcPolling(prev);
         }
 
+        // Ensure pages expand horizontally to use the available viewport width
+        if (node instanceof Region r) {
+            r.setMaxWidth(Double.MAX_VALUE);
+            // allow the region to grow horizontally when scrollPane's viewport expands
+            HBox.setHgrow(r, Priority.ALWAYS);
+            VBox.setVgrow(r, Priority.ALWAYS);
+            r.setPrefWidth(contentArea.getMaxWidth() > 0 ? contentArea.getMaxWidth() : Region.USE_COMPUTED_SIZE);
+        }
+
         contentArea.getChildren().setAll(node);
+
+        // make sure the node width tracks the contentArea / viewport width
+        // (use runLater so layout bounds are valid)
+        Platform.runLater(() -> {
+            if (node instanceof Region r && scrollPane.getViewportBounds() != null) {
+                double vw = Math.max(0, scrollPane.getViewportBounds().getWidth() - 2);
+                r.setPrefWidth(vw);
+            }
+        });
+
         FadeTransition fadeIn = new FadeTransition(Duration.millis(400), node);
         fadeIn.setFromValue(0);
         fadeIn.setToValue(1);

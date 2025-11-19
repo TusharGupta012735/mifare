@@ -52,15 +52,34 @@ public class EntryForm {
         header.setPadding(new Insets(0, 0, 12, 0));
 
         // --- Top Center Banner (big, colorful) ---
+        // create banner but DO NOT style it yet — only style when text is set
         Label banner = new Label();
         banner.getStyleClass().add("status-banner");
         banner.setId("statusBanner");
         banner.setMaxWidth(Double.MAX_VALUE);
         banner.setWrapText(true);
-        setBannerInfo(banner, ""); // start blank, styled
+
+        // Wrap the banner but only show/manage the wrapper when banner has non-blank
+        // text.
+        // This prevents the empty styled rectangle from occupying space.
         HBox bannerWrap = new HBox(banner);
         bannerWrap.setAlignment(Pos.CENTER);
         bannerWrap.setPadding(new Insets(0, 0, 12, 0));
+
+        // binding: bannerWrap visible & managed only when banner.text is non-empty
+        // (trimmed)
+        javafx.beans.binding.BooleanBinding hasBannerText = Bindings.createBooleanBinding(
+                () -> {
+                    String t = banner.getText();
+                    return t != null && !t.trim().isEmpty();
+                },
+                banner.textProperty());
+        bannerWrap.visibleProperty().bind(hasBannerText);
+        bannerWrap.managedProperty().bind(hasBannerText);
+
+        // NOTE: do NOT call setBannerInfo(banner, "") here — call setBannerInfo /
+        // setBannerWarn / setBannerError
+        // later only when you want the banner to appear with content.
 
         String baseStyleCore = "-fx-background-color: white; -fx-border-color: #bdbdbd; -fx-border-radius: 6; " +
                 "-fx-background-radius: 6; -fx-padding: 8 10; -fx-text-fill: #212121;";
