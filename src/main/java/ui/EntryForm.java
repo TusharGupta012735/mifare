@@ -839,43 +839,121 @@ public class EntryForm {
 
             // --- STOP any running NFC auto-fill poller to avoid device contention ---
             Object svcObj = root.getProperties().get("nfc-poller");
-            java.util.concurrent.ScheduledExecutorService savedSvc = svcObj instanceof java.util.concurrent.ScheduledExecutorService
+            try (java.util.concurrent.ScheduledExecutorService savedSvc = svcObj instanceof java.util.concurrent.ScheduledExecutorService
                     ? (java.util.concurrent.ScheduledExecutorService) svcObj
-                    : null;
-            if (savedSvc != null) {
-                util.DebugLog.d("Stopping nfc-poller before write (idx=%d).", index[0]);
-                try {
-                    // best-effort shutdown
-                    savedSvc.shutdownNow();
-                    // remove property so other code knows poller is stopped
-                    root.getProperties().remove("nfc-poller");
-                    // wait briefly for tasks to die (non-blocking; short wait)
+                    : null) {
+                if (savedSvc != null) {
+                    util.DebugLog.d("Stopping nfc-poller before write (idx=%d).", index[0]);
                     try {
-                        savedSvc.awaitTermination(250, java.util.concurrent.TimeUnit.MILLISECONDS);
-                    } catch (InterruptedException ie) {
-                        Thread.currentThread().interrupt();
+                        // best-effort shutdown
+                        savedSvc.shutdownNow();
+                        // remove property so other code knows poller is stopped
+                        root.getProperties().remove("nfc-poller");
+                        // wait briefly for tasks to die (non-blocking; short wait)
+                        try {
+                            savedSvc.awaitTermination(250, java.util.concurrent.TimeUnit.MILLISECONDS);
+                        } catch (InterruptedException ie) {
+                            Thread.currentThread().interrupt();
+                        }
+                    } catch (Throwable t) {
+                        util.DebugLog.ex(t, "Error shutting down nfc-poller:");
                     }
-                } catch (Throwable t) {
-                    util.DebugLog.ex(t, "Error shutting down nfc-poller:");
                 }
-            }
 
-            overlay.setVisible(true);
-            util.DebugLog.d("Overlay visible -> true (starting write). idx=%d", index[0]);
+                overlay.setVisible(true);
+                util.DebugLog.d("Overlay visible -> true (starting write). idx=%d", index[0]);
 
-            status.setText("Writing record " + (index[0] + 1) + " / " + total + " — present card now...");
+                status.setText("Writing record " + (index[0] + 1) + " / " + total + " — present card now...");
 
-            Consumer<Boolean> finish = success -> {
-                util.DebugLog.d("finish called for idx=%d success=%b", index[0], success);
-                Platform.runLater(() -> {
+                Consumer<Boolean> finish = success -> {
+                    util.DebugLog.d("finish called for idx=%d success=%b", index[0], success);
+                    Platform.runLater(() -> {
+                        overlay.setVisible(false);
+                        util.DebugLog.d("Overlay visible -> false (finished). idx=%d success=%b", index[0], success);
+
+                        // Attempt to restart poller if we had one before; give driver a tiny settle
+                        // delay.
+                        if (savedSvc != null) {
+                            util.DebugLog.d("Waiting briefly (200ms) before restarting nfc-poller.");
+                            // spawn a short background task to restart without blocking FX
+                            new Thread(() -> {
+                                try {
+                                    Thread.sleep(200);
+                                } catch (InterruptedException ie) {
+                                    Thread.currentThread().interrupt();
+                                }
+                                try {
+                                    util.DebugLog.d("Restarting nfc-poller after write (idx=%d).", index[0]);
+                                    java.util.concurrent.ScheduledExecutorService newSvc = startNfcAutoFill(root,
+                                            fullName, bsguid, participationType,
+                                            bsgDistrict, email, phoneNumber,
+                                            bsgState, memberTyp, unitNam,
+                                            rank_or_section, dateOfBirth, age,
+                                            false,
+                                            1200);
+                                    if (newSvc != null) {
+                                        root.getProperties().put("nfc-poller", newSvc);
+                                        util.DebugLog.d("nfc-poller restarted successfully.");
+                                    } else {
+                                        util.DebugLog.d("startNfcAutoFill returned null; nfc-poller not restarted.");
+                                    }
+                                } catch (Throwable t) {
+                                    util.DebugLog.ex(t, "Failed to restart nfc-poller:");
+                                }
+                            }, "nfc-restart-thread").start();
+                        }
+
+                        if (success) {
+                            index[0]++;
+                            if (!running[0] || index[0] >= total) {
+                                status.setText("Batch finished. Processed " + Math.min(total, index[0]) + " rows.");
+                                writeNextBtn.setDisable(true);
+                                skipBtn.setDisable(true);
+                                stopBtn.setDisable(true);
+                                util.DebugLog.d("Batch finished. processed=%d", index[0]);
+                                return;
+                            }
+                            fillCurrent.run();
+                            status.setText("Ready for record " + (index[0] + 1) + " / " + total
+                                    + " — Present card and click Write & Next.");
+                            util.DebugLog.d("Ready for next record idx=%d", index[0]);
+                        } else {
+                            // stay on same record
+                            status.setText("Write failed. Present the card again and click Write & Next.");
+                            util.DebugLog.d("Write failed; staying on idx=%d", index[0]);
+                        }
+                        // Re-enable controls for next action (both cases)
+                        writeNextBtn.setDisable(false);
+                        skipBtn.setDisable(false);
+                        stopBtn.setDisable(false);
+                    });
+                };
+
+                try {
+                    util.DebugLog.d("onSave.accept() about to be called for idx=%d", index[0]);
+                    if (onSave != null) {
+                        long before = System.nanoTime();
+                        onSave.accept(data, success -> {
+                            long durMs = (System.nanoTime() - before) / 1_000_000L;
+                            util.DebugLog.d("onSave callback completed (idx=%d) duration=%dms -> result=%b", index[0],
+                                    durMs, success);
+                            finish.accept(success);
+                        });
+                    } else {
+                        util.DebugLog.d("onSave is null; auto-marking success for idx=%d", index[0]);
+                        finish.accept(true);
+                    }
+                } catch (Exception ex) {
+                    util.DebugLog.ex(ex, "Exception while calling onSave for idx=%d", index[0]);
+                    // hide overlay and re-enable UI on error
                     overlay.setVisible(false);
-                    util.DebugLog.d("Overlay visible -> false (finished). idx=%d success=%b", index[0], success);
+                    status.setText("Write failed: " + ex.getMessage());
+                    writeNextBtn.setDisable(false);
+                    skipBtn.setDisable(false);
+                    stopBtn.setDisable(false);
 
-                    // Attempt to restart poller if we had one before; give driver a tiny settle
-                    // delay.
+                    // ensure poller restarted if needed
                     if (savedSvc != null) {
-                        util.DebugLog.d("Waiting briefly (200ms) before restarting nfc-poller.");
-                        // spawn a short background task to restart without blocking FX
                         new Thread(() -> {
                             try {
                                 Thread.sleep(200);
@@ -883,7 +961,6 @@ public class EntryForm {
                                 Thread.currentThread().interrupt();
                             }
                             try {
-                                util.DebugLog.d("Restarting nfc-poller after write (idx=%d).", index[0]);
                                 java.util.concurrent.ScheduledExecutorService newSvc = startNfcAutoFill(root,
                                         fullName, bsguid, participationType,
                                         bsgDistrict, email, phoneNumber,
@@ -893,88 +970,12 @@ public class EntryForm {
                                         1200);
                                 if (newSvc != null) {
                                     root.getProperties().put("nfc-poller", newSvc);
-                                    util.DebugLog.d("nfc-poller restarted successfully.");
-                                } else {
-                                    util.DebugLog.d("startNfcAutoFill returned null; nfc-poller not restarted.");
                                 }
                             } catch (Throwable t) {
-                                util.DebugLog.ex(t, "Failed to restart nfc-poller:");
+                                util.DebugLog.ex(t, "Failed to restart nfc-poller after exception:");
                             }
-                        }, "nfc-restart-thread").start();
+                        }, "nfc-restart-on-error").start();
                     }
-
-                    if (success) {
-                        index[0]++;
-                        if (!running[0] || index[0] >= total) {
-                            status.setText("Batch finished. Processed " + Math.min(total, index[0]) + " rows.");
-                            writeNextBtn.setDisable(true);
-                            skipBtn.setDisable(true);
-                            stopBtn.setDisable(true);
-                            util.DebugLog.d("Batch finished. processed=%d", index[0]);
-                            return;
-                        }
-                        fillCurrent.run();
-                        status.setText("Ready for record " + (index[0] + 1) + " / " + total
-                                + " — Present card and click Write & Next.");
-                        util.DebugLog.d("Ready for next record idx=%d", index[0]);
-                    } else {
-                        // stay on same record
-                        status.setText("Write failed. Present the card again and click Write & Next.");
-                        util.DebugLog.d("Write failed; staying on idx=%d", index[0]);
-                    }
-                    // Re-enable controls for next action (both cases)
-                    writeNextBtn.setDisable(false);
-                    skipBtn.setDisable(false);
-                    stopBtn.setDisable(false);
-                });
-            };
-
-            try {
-                util.DebugLog.d("onSave.accept() about to be called for idx=%d", index[0]);
-                if (onSave != null) {
-                    long before = System.nanoTime();
-                    onSave.accept(data, success -> {
-                        long durMs = (System.nanoTime() - before) / 1_000_000L;
-                        util.DebugLog.d("onSave callback completed (idx=%d) duration=%dms -> result=%b", index[0],
-                                durMs, success);
-                        finish.accept(success);
-                    });
-                } else {
-                    util.DebugLog.d("onSave is null; auto-marking success for idx=%d", index[0]);
-                    finish.accept(true);
-                }
-            } catch (Exception ex) {
-                util.DebugLog.ex(ex, "Exception while calling onSave for idx=%d", index[0]);
-                // hide overlay and re-enable UI on error
-                overlay.setVisible(false);
-                status.setText("Write failed: " + ex.getMessage());
-                writeNextBtn.setDisable(false);
-                skipBtn.setDisable(false);
-                stopBtn.setDisable(false);
-
-                // ensure poller restarted if needed
-                if (savedSvc != null) {
-                    new Thread(() -> {
-                        try {
-                            Thread.sleep(200);
-                        } catch (InterruptedException ie) {
-                            Thread.currentThread().interrupt();
-                        }
-                        try {
-                            java.util.concurrent.ScheduledExecutorService newSvc = startNfcAutoFill(root,
-                                    fullName, bsguid, participationType,
-                                    bsgDistrict, email, phoneNumber,
-                                    bsgState, memberTyp, unitNam,
-                                    rank_or_section, dateOfBirth, age,
-                                    false,
-                                    1200);
-                            if (newSvc != null) {
-                                root.getProperties().put("nfc-poller", newSvc);
-                            }
-                        } catch (Throwable t) {
-                            util.DebugLog.ex(t, "Failed to restart nfc-poller after exception:");
-                        }
-                    }, "nfc-restart-on-error").start();
                 }
             }
         });

@@ -10,7 +10,6 @@ import javafx.scene.input.KeyCode;
 import javafx.scene.layout.*;
 import javafx.scene.text.Font;
 import javafx.stage.Window;
-
 import java.util.*;
 
 public final class BatchFilterDialog {
@@ -71,13 +70,7 @@ public final class BatchFilterDialog {
         // --- “Card” with inputs ---
         VBox card = new VBox(14);
         card.setPadding(new Insets(16));
-        card.setStyle("""
-                    -fx-background-color: white;
-                    -fx-background-radius: 12;
-                    -fx-border-radius: 12;
-                    -fx-border-color: #E0E0E0;
-                    -fx-effect: dropshadow(gaussian, rgba(0,0,0,0.08), 12, 0, 0, 3);
-                """);
+        card.getStyleClass().add("card");
 
         Label title = new Label("📂 Prepare Batch");
         title.setStyle("-fx-text-fill: #1565C0; -fx-font-weight: 800;");

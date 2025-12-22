@@ -1,0 +1,42 @@
+/* ===== Base card container ===== */
+.card {
+  -fx-background-color: white;
+  -fx-background-radius: 12;
+  -fx-border-radius: 12;
+  -fx-border-color: #e0e0e0;
+  -fx-effect: dropshadow(gaussian, rgba(0, 0, 0, 0.08), 12, 0, 0, 3);
+}
+
+/* ===== Page titles ===== */
+.page-title {
+  -fx-font-weight: 800;
+  -fx-text-fill: #1565c0;
+}
+
+/* ===== Form labels ===== */
+.form-label {
+  -fx-font-weight: 700;
+  -fx-text-fill: #263238;
+  -fx-font-size: 16px;
+}
+
+/* ===== Primary button ===== */
+.btn-primary {
+  -fx-background-color: #2196f3;
+  -fx-text-fill: white;
+  -fx-font-weight: 600;
+  -fx-background-radius: 6;
+}
+
+/* ===== Ghost button ===== */
+.btn-ghost {
+  -fx-background-color: transparent;
+  -fx-text-fill: #1565c0;
+  -fx-font-size: 12px;
+  -fx-underline: true;
+}
+
+.root {
+  -fx-font-size: 18px;
+  -fx-font-family: "System";
+}

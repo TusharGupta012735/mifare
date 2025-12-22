@@ -4,11 +4,10 @@ import java.io.IOException;
 import java.sql.SQLException;
 import java.util.*;
 import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.stream.Collectors;
 
-import db.AccessDb;
+import controller.EventFormController;
 import nfc.SmartMifareReader;
-import nfc.SmartMifareWriter;
+import ui.pages.EventFormPage;
 import util.DebugLog;
 import javafx.application.Platform;
 import javafx.scene.Parent;
@@ -18,10 +17,8 @@ import javafx.geometry.Insets;
 import javafx.geometry.Pos;
 import javafx.scene.control.*;
 import javafx.scene.layout.*;
-import javafx.scene.text.Text;
 import javafx.util.Duration;
 import javafx.scene.Node;
-import javafx.scene.paint.Color;
 
 public class Dashboard extends BorderPane {
 
@@ -32,12 +29,10 @@ public class Dashboard extends BorderPane {
     private final AtomicBoolean attendancePollerRunning = new AtomicBoolean(false);
     private final AtomicBoolean onAttendanceTab = new AtomicBoolean(false);
 
-    // Reuse these whenever the Attendance tab is (re)loaded
-    private static final String LOC_EVENT_PATH = "src/main/resources/location.txt";
-
     private static final String SEED_LOCATION_RESOURCE = "/location.txt";
     private static final String LOCATION_FILENAME = "location.txt";
 
+    // to get local saved database file
     private java.nio.file.Path resolveUserDataDir() {
         try {
             java.nio.file.Path dbPath = db.AccessDb.getActiveDbPath(); // returns Path to bsd.accdb inside user data dir
@@ -64,12 +59,6 @@ public class Dashboard extends BorderPane {
             return java.nio.file.Paths.get(System.getProperty("user.home"), ".local", "share", "AttendanceApp", "data");
         }
     }
-
-    /**
-     * Ensure a writable location.txt exists in the user data dir. If missing, copy
-     * the bundled classpath seed resource (SEED_LOCATION_RESOURCE) to it.
-     * Returns the filesystem path to the writable file.
-     */
     private java.nio.file.Path ensureWritableLocationFilePresent() {
         java.nio.file.Path dataDir = resolveUserDataDir();
         try {
@@ -101,7 +90,6 @@ public class Dashboard extends BorderPane {
         return writable;
     }
 
-    private static final boolean LOC_EVENT_CLASSPATH = false;
     private static final String LOGO_PATH = "/logo-removebg-preview.png";
 
     private AttendanceView attendanceView;
@@ -228,6 +216,7 @@ public class Dashboard extends BorderPane {
         Button reportBtn = new Button("Report");
         Button importBtn = new Button("Import Excel");
         Button exportParticipantsBtn = new Button("Export Data");
+        Button addEventBtn = new Button("Add Event");
 
         // --- Common Button Style ---
         String btnStyle = """
@@ -253,20 +242,21 @@ public class Dashboard extends BorderPane {
                 """;
 
         for (Button btn : new Button[] { attendanceBtn, entryFormBtn, batchBtn, reportBtn, importBtn,
-                exportParticipantsBtn }) {
+                exportParticipantsBtn, addEventBtn }) {
             btn.setStyle(btnStyle);
             btn.setOnMouseEntered(e -> btn.setStyle(hoverStyle));
             btn.setOnMouseExited(e -> btn.setStyle(btnStyle));
         }
 
         // --- Navbar Layout (added Import Excel at the end) ---
-        HBox navBar = new HBox(20, attendanceBtn, entryFormBtn, batchBtn, reportBtn, importBtn, exportParticipantsBtn);
+        HBox navBar = new HBox(20, attendanceBtn, entryFormBtn, batchBtn, reportBtn, importBtn, exportParticipantsBtn,
+                addEventBtn);
         navBar.setPadding(new Insets(15, 20, 15, 20));
         navBar.setStyle(
                 "-fx-background-color: linear-gradient(to bottom, #1565c0, #0d47a1); -fx-alignment: center; -fx-effect: dropshadow(gaussian, rgba(0,0,0,0.2), 8, 0, 0, 2);");
 
         for (Button btn : new Button[] { attendanceBtn, entryFormBtn, batchBtn, reportBtn, importBtn,
-                exportParticipantsBtn }) {
+                exportParticipantsBtn, addEventBtn }) {
             HBox.setHgrow(btn, Priority.ALWAYS);
             btn.setMaxWidth(Double.MAX_VALUE);
         }
@@ -313,8 +303,6 @@ public class Dashboard extends BorderPane {
 
         // --- Actions ---
         attendanceBtn.setOnAction(e -> {
-            // log the user's action
-            DebugLog.d("Attendance button clicked - switching to Attendance tab");
 
             // 1) request we are no longer on attendance tab (helps poller exit quickly)
             onAttendanceTab.set(false);
@@ -1140,6 +1128,12 @@ public class Dashboard extends BorderPane {
             });
         });
 
+        addEventBtn.setOnAction(e -> {
+            EventFormController controller = new EventFormController();
+
+            Parent page = EventFormPage.create(controller::handleCreate);
+            setContent(page);
+        });
     }
 
     // --- Helper Method for Page Switching with Animation ---
@@ -1176,33 +1170,13 @@ public class Dashboard extends BorderPane {
         fadeIn.play();
     }
 
-    private void setContent(String text) {
-        Text newText = new Text(text);
-        newText.setStyle("-fx-font-size: 20px; -fx-fill: #212121; -fx-font-weight: 600;");
-        setContent(newText);
-    }
-
-    private void setAttendancePrompt() {
-        Platform.runLater(() -> {
-            if (attendanceView != null) {
-                attendanceView.getHeadline().setText("Tap your card");
-                attendanceView.getHeadline().setStyle("""
-                                -fx-font-size: 28px;
-                                -fx-font-weight: 900;
-                                -fx-text-fill: #0D47A1;
-                        """);
-                attendanceView.getUidLabel().setText("");
-            }
-        });
-    }
-
     private void showUid(String uid) {
         Platform.runLater(() -> {
             if (attendanceView != null) {
                 attendanceView.getHeadline().setText("Card detected");
                 attendanceView.getHeadline().setStyle("""
-                                -fx-font-size: 28px;
-                                -fx-font-weight: 900;
+                    -fx-font-size: 28px;
+                    -fx-font-weight: 900;
                                 -fx-text-fill: #2E7D32;
                         """);
                 attendanceView.getUidLabel().setText("UID: " + uid);
@@ -1218,32 +1192,45 @@ public class Dashboard extends BorderPane {
                                 -fx-font-size: 28px;
                                 -fx-font-weight: 900;
                                 -fx-text-fill: #E65100;
+                            """);
+            }
+        });
+    }
+    
+    private void setAttendancePrompt() {
+        Platform.runLater(() -> {
+            if (attendanceView != null) {
+                attendanceView.getHeadline().setText("Tap your card");
+                attendanceView.getHeadline().setStyle("""
+                                -fx-font-size: 28px;
+                                -fx-font-weight: 900;
+                                -fx-text-fill: #0D47A1;
                         """);
+                attendanceView.getUidLabel().setText("");
             }
         });
     }
 
     // >>> Attendance poller control
-
+    
     /**
      * Start (or restart) the attendance poller. Safe to call repeatedly.
      * Waits indefinitely for a card; when present, shows UID, then waits until card
      * is removed and returns to "Tap your card".
-     */
-    // Add near the top of Dashboard (class fields) or as local finals inside
+    */
+   // Add near the top of Dashboard (class fields) or as local finals inside
     // startAttendancePoller():
     private static final int PROBE_TIMEOUT_MS = 200; // each probe wait
-    private static final int ABSENT_CONFIRM_MS = 1000; // must see NULL for this long to consider removed
 
     private void startAttendancePoller() {
-
+        
         if (attendancePollerRunning.get())
             return;
-
+        
         attendancePollerRunning.set(true);
         attendancePollerThread = new Thread(() -> {
             Thread.currentThread().setPriority(Thread.MIN_PRIORITY);
-
+            
             while (attendancePollerRunning.get() && onAttendanceTab.get()) {
                 // WAIT FOR CARD (short-timeout polling so we can stop cooperatively)
                 SmartMifareReader.ReadResult rr = null;
@@ -1361,11 +1348,6 @@ public class Dashboard extends BorderPane {
         attendancePollerThread.start();
     }
 
-    /**
-     * Called whenever we navigate away from the Attendance tab.
-     * Ensures the poller is fully stopped and state cleared (so other tabs aren't
-     * affected).
-     */
     private void leaveAttendance() {
         onAttendanceTab.set(false);
         stopAttendancePoller();

@@ -17,6 +17,9 @@ public class MainUI extends Application {
         stage.setScene(scene);
         stage.setTitle("NFC Attendance System");
         stage.show();
+
+        scene.getStylesheets().add(
+                getClass().getResource("/ui/styles/app.css").toExternalForm());
     }
 
     public static void main(String[] args) {
