@@ -10,11 +10,38 @@ import ui.common.LoaderOverlay;
 
 import java.time.LocalDate;
 import java.time.LocalTime;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.function.Consumer;
 
 public class EventFormPage {
 
     public static Parent create(Consumer<EventFormData> onSubmit) {
+
+        // ------------to get location of
+        // events--------------------------------------------------
+        List<TextField> locationFields = new ArrayList<>();
+
+        VBox locationsBox = new VBox(8);
+        locationsBox.setPadding(new Insets(6, 0, 6, 0));
+
+        Button addLocationBtn = new Button("+ Add Location");
+        addLocationBtn.getStyleClass().add("btn-secondary");
+
+        Runnable addLocationField = () -> {
+            TextField tf = new TextField();
+            tf.setPromptText("Location name");
+            tf.getStyleClass().add("input");
+
+            locationFields.add(tf);
+            locationsBox.getChildren().add(tf);
+        };
+
+        addLocationField.run(); // add first field by default
+
+        addLocationBtn.setOnAction(e -> addLocationField.run());
+        // ------------to get location of
+        // events--------------------------------------------------
 
         TextField name = new TextField();
         name.setPromptText("Event name");
@@ -53,11 +80,14 @@ public class EventFormPage {
 
         add(grid, 0, "Name", name);
         add(grid, 1, "Venue", venue);
-        add(grid, 2, "Date", date);
-        add(grid, 3, "Participant Type", type);
-        add(grid, 4, "Custom Type", otherType);
-        add(grid, 5, "Entry From", fromTime);
-        add(grid, 6, "Entry Till", tillTime);
+        add(grid, 2, "Locations", locationsBox);
+        // grid.add(addLocationBtn, 1, 3);
+        add(grid, 3, "+Add more", addLocationBtn);
+        add(grid, 4, "Date", date);
+        add(grid, 5, "Participant Type", type);
+        add(grid, 6, "Custom Type", otherType);
+        add(grid, 7, "Entry From", fromTime);
+        add(grid, 8, "Entry Till", tillTime);
 
         Button save = new Button("Save Event");
         save.getStyleClass().add("btn-primary");
@@ -84,6 +114,15 @@ public class EventFormPage {
                 alert("Enter custom participant type");
                 return;
             }
+            List<String> locations = locationFields.stream()
+                    .map(tf -> tf.getText().trim())
+                    .filter(s -> !s.isEmpty())
+                    .toList();
+
+            if (locations.isEmpty()) {
+                alert("At least one location is required");
+                return;
+            }
 
             EventFormData ev = new EventFormData();
             ev.name = name.getText().trim();
@@ -93,6 +132,7 @@ public class EventFormPage {
             ev.customParticipantType = otherType.getText().trim();
             ev.entryAllowedFrom = fromTime.getValue();
             ev.entryAllowedTill = tillTime.getValue();
+            ev.locations = new ArrayList<>(locations);
 
             LoaderOverlay loader = (LoaderOverlay) root.getProperties().get("loader");
 
@@ -145,13 +185,13 @@ public class EventFormPage {
         return sp;
     }
 
-    private static void add(GridPane g, int r, String l, Control c) {
+    private static void add(GridPane g, int r, String l, javafx.scene.Node n) {
         Label lbl = new Label(l + ":");
         lbl.getStyleClass().add("form-label");
 
         g.add(lbl, 0, r);
-        g.add(c, 1, r);
-        GridPane.setHgrow(c, Priority.ALWAYS);
+        g.add(n, 1, r);
+        GridPane.setHgrow(n, Priority.ALWAYS);
     }
 
     private static void alert(String msg) {

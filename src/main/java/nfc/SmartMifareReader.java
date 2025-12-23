@@ -12,7 +12,7 @@ public class SmartMifareReader {
             TerminalFactory factory = TerminalFactory.getDefault();
             List<CardTerminal> terminals = factory.terminals().list();
             if (terminals == null || terminals.isEmpty()) {
-                System.err.println("SmartMifareReader: no NFC reader detected (waitForCardAbsent).");
+                // System.err.println("SmartMifareReader: no NFC reader detected (waitForCardAbsent).");
                 return false;
             }
             CardTerminal terminal = terminals.get(0);
@@ -24,7 +24,7 @@ public class SmartMifareReader {
                 return terminal.waitForCardAbsent(timeoutMs);
             }
         } catch (Exception e) {
-            System.err.println("SmartMifareReader waitForCardAbsent error: " + e.getMessage());
+            // System.err.println("SmartMifareReader waitForCardAbsent error: " + e.getMessage());
             return false;
         }
     }
@@ -67,7 +67,7 @@ public class SmartMifareReader {
             TerminalFactory factory = TerminalFactory.getDefault();
             List<CardTerminal> terminals = factory.terminals().list();
             if (terminals == null || terminals.isEmpty()) {
-                System.err.println("SmartMifareReader: no NFC reader detected.");
+                // System.err.println("SmartMifareReader: no NFC reader detected.");
                 return null;
             }
             CardTerminal terminal = terminals.get(0);
@@ -133,10 +133,10 @@ public class SmartMifareReader {
                 }
             }
         } catch (CardException ce) {
-            System.err.println("SmartMifareReader CardException: " + ce.getMessage());
+            // System.err.println("SmartMifareReader CardException: " + ce.getMessage());
             return null;
         } catch (Exception e) {
-            System.err.println("SmartMifareReader unexpected error: " + e.getMessage());
+            // System.err.println("SmartMifareReader unexpected error: " + e.getMessage());
             e.printStackTrace();
             return null;
         }

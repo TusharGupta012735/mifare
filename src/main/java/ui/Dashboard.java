@@ -267,7 +267,6 @@ public class Dashboard extends BorderPane {
         setContent(attendanceView.getView());
         attendanceView.setLogo(LOGO_PATH);
         java.nio.file.Path writableLocInit = ensureWritableLocationFilePresent();
-        attendanceView.loadLocationEventFromFile(writableLocInit.toString(), false);
 
         onAttendanceTab.set(true);
         startAttendancePoller();
@@ -334,10 +333,6 @@ public class Dashboard extends BorderPane {
                 attendanceView = new AttendanceView(); // create new instance
                 attendanceView.setLogo(LOGO_PATH);
                 setContent(attendanceView.getView());
-
-                // load location/event (writable copy) and start poller
-                java.nio.file.Path writableLocReload = ensureWritableLocationFilePresent();
-                attendanceView.loadLocationEventFromFile(writableLocReload.toString(), false);
 
                 DebugLog.d("Starting attendance poller");
                 startAttendancePoller();

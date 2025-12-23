@@ -6,12 +6,13 @@ import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.time.LocalDate;
 import java.time.LocalTime;
+import java.util.List;
 
 import db.AccessDb;
 
 public class EventFormRepository {
 
-    private static final String TABLE_NAME = "events";
+    private static final String TABLE_NAME = "Events"; 
 
     private static final String CREATE_TABLE_SQL = """
             CREATE TABLE Events (
@@ -23,6 +24,7 @@ public class EventFormRepository {
                 custom_participant_type TEXT(100),
                 entry_from TEXT(10),
                 entry_till TEXT(10),
+                locations TEXT(500),
                 created_at TEXT(30)
             )
             """;
@@ -35,14 +37,16 @@ public class EventFormRepository {
                 participant_type,
                 custom_participant_type,
                 entry_from,
-                entry_till
+                entry_till,
+                locations
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             """;
 
     public void insertEvent(
             String name,
             String venue,
+            List<String> locations,
             LocalDate date,
             String participantType,
             String customParticipantType,
@@ -52,19 +56,30 @@ public class EventFormRepository {
         try (Connection conn = AccessDb.getConnection()) {
             ensureTableExists(conn);
 
+            // ✅ FIX 1: build CSV safely
+            String locationsCsv = null;
+            if (locations != null && !locations.isEmpty()) {
+                locationsCsv = String.join(
+                        ",",
+                        locations.stream()
+                                .map(String::trim)
+                                .filter(s -> !s.isEmpty())
+                                .toList());
+            }
+
             try (PreparedStatement ps = conn.prepareStatement(INSERT_EVENT_SQL)) {
 
                 ps.setString(1, name);
                 ps.setString(2, venue);
-                ps.setString(3, date != null ? date.toString() : null);
+                ps.setString(3, date != null ? date.toString() : null); 
                 ps.setString(4, participantType);
                 ps.setString(5, customParticipantType);
                 ps.setString(6, entryFrom != null ? entryFrom.toString() : null);
                 ps.setString(7, entryTill != null ? entryTill.toString() : null);
+                ps.setString(8, locationsCsv); 
 
                 ps.executeUpdate();
             }
-
         }
     }
 

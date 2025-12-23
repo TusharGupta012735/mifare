@@ -19,12 +19,15 @@ public final class EventFormService {
         }
 
         // Example DB insert (replace with your AccessDb logic)
-        eventFormRepository.insertEvent(ev.name,
+        eventFormRepository.insertEvent(
+                ev.name,
                 ev.venue,
+                ev.locations,
                 ev.date,
                 ev.participantType,
                 ev.customParticipantType,
                 ev.entryAllowedFrom,
-                ev.entryAllowedTill);
+                ev.entryAllowedTill
+            );
     }
 }
