@@ -29,67 +29,6 @@ public class Dashboard extends BorderPane {
     private final AtomicBoolean attendancePollerRunning = new AtomicBoolean(false);
     private final AtomicBoolean onAttendanceTab = new AtomicBoolean(false);
 
-    private static final String SEED_LOCATION_RESOURCE = "/location.txt";
-    private static final String LOCATION_FILENAME = "location.txt";
-
-    // to get local saved database file
-    private java.nio.file.Path resolveUserDataDir() {
-        try {
-            java.nio.file.Path dbPath = db.AccessDb.getActiveDbPath(); // returns Path to bsd.accdb inside user data dir
-            if (dbPath != null) {
-                java.nio.file.Path parent = dbPath.getParent();
-                if (parent != null)
-                    return parent;
-            }
-        } catch (Exception ignore) {
-            // ignore and fall through to fallback
-        }
-        // fallback cross-platform default (same logic AccessDb uses)
-        String os = System.getProperty("os.name", "").toLowerCase(java.util.Locale.ROOT);
-        if (os.contains("win")) {
-            String localAppData = System.getenv("LOCALAPPDATA");
-            java.nio.file.Path base = (localAppData != null)
-                    ? java.nio.file.Paths.get(localAppData)
-                    : java.nio.file.Paths.get(System.getProperty("user.home"), "AppData", "Local");
-            return base.resolve("AttendanceApp").resolve("data");
-        } else if (os.contains("mac")) {
-            return java.nio.file.Paths.get(System.getProperty("user.home"), "Library", "Application Support",
-                    "AttendanceApp", "data");
-        } else {
-            return java.nio.file.Paths.get(System.getProperty("user.home"), ".local", "share", "AttendanceApp", "data");
-        }
-    }
-    private java.nio.file.Path ensureWritableLocationFilePresent() {
-        java.nio.file.Path dataDir = resolveUserDataDir();
-        try {
-            java.nio.file.Files.createDirectories(dataDir);
-        } catch (Exception ex) {
-            System.err.println("Failed to create data dir: " + ex);
-        }
-        java.nio.file.Path writable = dataDir.resolve(LOCATION_FILENAME);
-
-        if (!java.nio.file.Files.exists(writable)) {
-            // try to copy bundled resource -> writable
-            try (java.io.InputStream in = getClass().getResourceAsStream(SEED_LOCATION_RESOURCE)) {
-                if (in != null) {
-                    try (java.io.OutputStream out = java.nio.file.Files.newOutputStream(writable,
-                            java.nio.file.StandardOpenOption.CREATE_NEW)) {
-                        in.transferTo(out);
-                        System.out.println("Copied seed location.txt to: " + writable);
-                    }
-                } else {
-                    // If seed not present in JAR, create a harmless default file
-                    String defaultContent = "Default Location\nDefault Event\n";
-                    java.nio.file.Files.writeString(writable, defaultContent, java.nio.charset.StandardCharsets.UTF_8);
-                    System.out.println("Wrote default location.txt to: " + writable);
-                }
-            } catch (Exception ex) {
-                System.err.println("Failed to copy seed location.txt -> " + writable + " : " + ex);
-            }
-        }
-        return writable;
-    }
-
     private static final String LOGO_PATH = "/logo-removebg-preview.png";
 
     private AttendanceView attendanceView;
@@ -266,7 +205,7 @@ public class Dashboard extends BorderPane {
         attendanceView = new AttendanceView();
         setContent(attendanceView.getView());
         attendanceView.setLogo(LOGO_PATH);
-        java.nio.file.Path writableLocInit = ensureWritableLocationFilePresent();
+        attendanceView.loadEventsAndBindLocations();
 
         onAttendanceTab.set(true);
         startAttendancePoller();
@@ -333,6 +272,8 @@ public class Dashboard extends BorderPane {
                 attendanceView = new AttendanceView(); // create new instance
                 attendanceView.setLogo(LOGO_PATH);
                 setContent(attendanceView.getView());
+
+                attendanceView.loadEventsAndBindLocations();
 
                 DebugLog.d("Starting attendance poller");
                 startAttendancePoller();
@@ -1170,10 +1111,10 @@ public class Dashboard extends BorderPane {
             if (attendanceView != null) {
                 attendanceView.getHeadline().setText("Card detected");
                 attendanceView.getHeadline().setStyle("""
-                    -fx-font-size: 28px;
-                    -fx-font-weight: 900;
-                                -fx-text-fill: #2E7D32;
-                        """);
+                        -fx-font-size: 28px;
+                        -fx-font-weight: 900;
+                                    -fx-text-fill: #2E7D32;
+                            """);
                 attendanceView.getUidLabel().setText("UID: " + uid);
             }
         });
@@ -1184,14 +1125,14 @@ public class Dashboard extends BorderPane {
             if (attendanceView != null) {
                 attendanceView.getHeadline().setText("Remove card…");
                 attendanceView.getHeadline().setStyle("""
-                                -fx-font-size: 28px;
-                                -fx-font-weight: 900;
-                                -fx-text-fill: #E65100;
-                            """);
+                            -fx-font-size: 28px;
+                            -fx-font-weight: 900;
+                            -fx-text-fill: #E65100;
+                        """);
             }
         });
     }
-    
+
     private void setAttendancePrompt() {
         Platform.runLater(() -> {
             if (attendanceView != null) {
@@ -1207,25 +1148,25 @@ public class Dashboard extends BorderPane {
     }
 
     // >>> Attendance poller control
-    
+
     /**
      * Start (or restart) the attendance poller. Safe to call repeatedly.
      * Waits indefinitely for a card; when present, shows UID, then waits until card
      * is removed and returns to "Tap your card".
-    */
-   // Add near the top of Dashboard (class fields) or as local finals inside
+     */
+    // Add near the top of Dashboard (class fields) or as local finals inside
     // startAttendancePoller():
     private static final int PROBE_TIMEOUT_MS = 200; // each probe wait
 
     private void startAttendancePoller() {
-        
+
         if (attendancePollerRunning.get())
             return;
-        
+
         attendancePollerRunning.set(true);
         attendancePollerThread = new Thread(() -> {
             Thread.currentThread().setPriority(Thread.MIN_PRIORITY);
-            
+
             while (attendancePollerRunning.get() && onAttendanceTab.get()) {
                 // WAIT FOR CARD (short-timeout polling so we can stop cooperatively)
                 SmartMifareReader.ReadResult rr = null;

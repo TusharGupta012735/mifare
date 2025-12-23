@@ -1,53 +1,58 @@
 package repository;
 
+import db.AccessDb;
+
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.util.*;
 
-import db.AccessDb;
-
 public class AttendanceRepository {
 
-    private static final String FETCH_LATEST_EVENT_SQL = """
-                SELECT TOP 1 name, locations
+    private static final String FETCH_ALL_EVENTS_SQL = """
+                SELECT id, name, locations
                 FROM Events
                 ORDER BY id DESC
             """;
 
-    public Optional<EventLocationsRow> fetchLatestEventAndLocations() throws Exception {
+    public List<EventRow> fetchAllEvents() throws Exception {
+
+        List<EventRow> list = new ArrayList<>();
 
         try (Connection conn = AccessDb.getConnection();
-                PreparedStatement ps = conn.prepareStatement(FETCH_LATEST_EVENT_SQL);
+                PreparedStatement ps = conn.prepareStatement(FETCH_ALL_EVENTS_SQL);
                 ResultSet rs = ps.executeQuery()) {
 
-            if (!rs.next()) {
-                return Optional.empty();
-            }
+            while (rs.next()) {
+                int id = rs.getInt("id");
+                String name = rs.getString("name");
+                String locationsCsv = rs.getString("locations");
 
-            String eventName = rs.getString("name");
-            String locationsCsv = rs.getString("locations");
-
-            List<String> locations = new ArrayList<>();
-            if (locationsCsv != null && !locationsCsv.isBlank()) {
-                for (String s : locationsCsv.split(",")) {
-                    String t = s.trim();
-                    if (!t.isEmpty())
-                        locations.add(t);
+                List<String> locations = new ArrayList<>();
+                if (locationsCsv != null && !locationsCsv.isBlank()) {
+                    for (String s : locationsCsv.split(",")) {
+                        String t = s.trim();
+                        if (!t.isEmpty())
+                            locations.add(t);
+                    }
                 }
-            }
 
-            return Optional.of(new EventLocationsRow(eventName, locations));
+                list.add(new EventRow(id, name, locations));
+            }
         }
+
+        return list;
     }
 
-    // simple DTO
-    public static class EventLocationsRow {
-        public final String eventName;
+    // DTO
+    public static class EventRow {
+        public final int id;
+        public final String name;
         public final List<String> locations;
 
-        public EventLocationsRow(String eventName, List<String> locations) {
-            this.eventName = eventName;
+        public EventRow(int id, String name, List<String> locations) {
+            this.id = id;
+            this.name = name;
             this.locations = locations;
         }
     }

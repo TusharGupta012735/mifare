@@ -9,19 +9,24 @@ import javafx.scene.image.Image;
 import javafx.scene.image.ImageView;
 import javafx.scene.layout.*;
 
-import java.io.BufferedReader;
 import java.time.LocalDate;
 import java.time.LocalTime;
 import java.time.format.DateTimeFormatter;
 import java.util.*;
 
 import nfc.SmartMifareReader;
+import service.AttendanceService.AttendanceEvent;
+
+import controller.AttendanceController;
 
 public class AttendanceView {
 
-    private static final double MAX_LOGO_WIDTH = 200; // cap logo width
-    private static final double LEFT_HEADING_WIDTH = 130; // width for heading cells in the details card
-    private static final String HEADING_BG_COLOR = "#1c56aeff"; // blue used for headings
+    private static AttendanceEvent LAST_EVENT = null;
+    private static String LAST_LOCATION = null;
+
+    private static final double MAX_LOGO_WIDTH = 200;
+    private static final double LEFT_HEADING_WIDTH = 130;
+    private static final String HEADING_BG_COLOR = "#1c56aeff";
 
     private volatile String locationText = "(unknown)";
     private volatile String eventText = "(unknown)";
@@ -48,9 +53,8 @@ public class AttendanceView {
     private final Label bsguidValue;
     private final Label dateValue;
     private final Label timeValue;
-    // location is a ComboBox
     private final ComboBox<String> locationCombo;
-    private final Label eventValue;
+    private ComboBox<AttendanceEvent> eventCombo;
 
     // Keep references for dynamic font updates
     private final List<Label> headingLabels = new ArrayList<>();
@@ -185,7 +189,6 @@ public class AttendanceView {
 
     // ---------------- Constructor / UI ----------------
     public AttendanceView() {
-        // --- TOP: left text (headline, uid) --- (increased fonts)
         headline = new Label("Tap your card");
         headline.setStyle("""
                 -fx-font-size: 32px;
@@ -254,13 +257,7 @@ public class AttendanceView {
         colRight.setHgrow(Priority.ALWAYS);
         detailsGrid.getColumnConstraints().addAll(colLeft, colRight);
 
-        // helper to create heading cells and value cells (increased font sizes)
-        // Create Event and Location first so they appear at the top of the bottom list
-        Label headingEvent = createHeadingLabel("Event");
-        eventValue = createValueLabel("(unknown)");
-
         Label headingLocation = createHeadingLabel("Location");
-        // create combo box for location selection (now placed in details grid at top)
         locationCombo = new ComboBox<>();
         locationCombo.setPromptText("Select room");
         locationCombo.setPrefWidth(220); // default preferred width
@@ -268,6 +265,11 @@ public class AttendanceView {
         locationCombo.setMaxWidth(320);
         // initial style same as value labels — will be updated by adjustFontSizes
         locationCombo.setStyle(String.format("-fx-font-size: %.1fpx;", BASE_VALUE_FONT));
+        locationCombo.setDisable(true);
+
+        eventCombo = new ComboBox<>();
+        eventCombo.setPromptText("Select Event");
+        eventCombo.setPrefWidth(240);
 
         Label headingFullName = createHeadingLabel("Full Name");
         fullNameValue = createValueLabel("(empty)");
@@ -281,8 +283,9 @@ public class AttendanceView {
         Label headingTime = createHeadingLabel("Time");
         timeValue = createValueLabel("(--:--)");
 
-        // add rows: event and location first (rows 0 & 1), then other details
-        addDetailRow(0, headingEvent, eventValue);
+        Label headingEvent = createHeadingLabel("Event");
+
+        addDetailRowNode(0, headingEvent, eventCombo);
         addDetailRowNode(1, headingLocation, locationCombo);
         addDetailRow(2, headingFullName, fullNameValue);
         addDetailRow(3, headingBsguid, bsguidValue);
@@ -314,10 +317,64 @@ public class AttendanceView {
             String sel = locationCombo.getValue();
             if (sel == null || sel.isBlank()) {
                 locationText = "(unknown)";
+                LAST_LOCATION = null;
             } else {
                 locationText = sel.trim();
+                LAST_LOCATION = locationText;
             }
         });
+
+        eventCombo.valueProperty().addListener((obs, oldEv, newEv) -> {
+
+            LAST_EVENT = newEv; // ✅ remember event
+            eventText = (newEv == null) ? "(unknown)" : newEv.name;
+
+            locationCombo.getItems().clear();
+            locationCombo.setValue(null);
+            locationCombo.setDisable(true);
+
+            if (newEv == null || newEv.locations.isEmpty()) {
+                return;
+            }
+
+            locationCombo.getItems().addAll(newEv.locations);
+            locationCombo.setDisable(false);
+
+            if (LAST_LOCATION != null && newEv.locations.contains(LAST_LOCATION)) {
+                locationCombo.setValue(LAST_LOCATION);
+                locationText = LAST_LOCATION;
+            }
+        });
+
+    }
+
+    public void loadEventsAndBindLocations() {
+
+        new Thread(() -> {
+
+            AttendanceController controller = new AttendanceController();
+            List<AttendanceEvent> events = controller.getAllEvents();
+
+            Platform.runLater(() -> {
+
+                eventCombo.getItems().clear();
+                eventCombo.getItems().addAll(events);
+
+                locationCombo.getItems().clear();
+                locationCombo.setDisable(true);
+
+                // ✅ restore previously selected event
+                if (LAST_EVENT != null) {
+                    for (AttendanceEvent ev : events) {
+                        if (ev.id == LAST_EVENT.id) {
+                            eventCombo.setValue(ev);
+                            break;
+                        }
+                    }
+                }
+            });
+
+        }, "attendance-load-events").start();
     }
 
     private Label createHeadingLabel(String text) {
@@ -518,26 +575,32 @@ public class AttendanceView {
             Platform.runLater(this::clearDetails);
             return;
         }
+
         String fn = null;
         String id = null;
+
         for (Map.Entry<String, String> e : cardFields.entrySet()) {
             String k = e.getKey() == null ? "" : e.getKey().trim().toLowerCase();
             String v = e.getValue();
-            if ("fullname".equals(k) || "name".equals(k))
+
+            if ("fullname".equals(k) || "name".equals(k)) {
                 fn = v;
-            if ("bsguid".equals(k) || "id".equals(k) || "uid".equals(k))
+            }
+
+            if ("bsguid".equals(k) || "id".equals(k) || "uid".equals(k)) {
                 id = v;
-            if ("location".equals(k))
-                setLocation(v);
-            if ("event".equals(k))
-                setEvent(v);
+            }
         }
-        if (id != null)
+
+        if (id != null) {
             id = id.replaceAll("\\s+", "");
-        final String finalFullName = fn == null || fn.isBlank() ? "(empty)" : fn;
-        final String finalBsguid = id == null || id.isBlank() ? "(empty)" : id;
+        }
+
+        final String finalFullName = (fn == null || fn.isBlank()) ? "(empty)" : fn;
+        final String finalBsguid = (id == null || id.isBlank()) ? "(empty)" : id;
         final String nowDate = LocalDate.now().format(DATE_FMT);
         final String nowTime = LocalTime.now().format(TIME_FMT);
+
         Platform.runLater(() -> {
             fullNameValue.setText(finalFullName);
             bsguidValue.setText(finalBsguid);
@@ -553,8 +616,6 @@ public class AttendanceView {
             bsguidValue.setText("(empty)");
             dateValue.setText("(--/--/----)");
             timeValue.setText("(--:--)");
-            // keep locationCombo selection intact
-            eventValue.setText(eventValue.getText() == null ? "(unknown)" : eventValue.getText());
         });
     }
 
@@ -601,11 +662,6 @@ public class AttendanceView {
         });
     }
 
-    public void setEvent(String text) {
-        eventText = (text == null || text.isBlank()) ? "(unknown)" : text;
-        Platform.runLater(() -> eventValue.setText(eventText));
-    }
-
     public String getLocationText() {
         // prefer Combo selection on FX thread; use volatile fallback otherwise
         try {
@@ -621,7 +677,8 @@ public class AttendanceView {
     }
 
     public String getEventText() {
-        return eventText;
+        AttendanceEvent ev = eventCombo.getValue();
+        return ev == null ? "(unknown)" : ev.name;
     }
 
     // ---------------- Dynamic font sizing ----------------
