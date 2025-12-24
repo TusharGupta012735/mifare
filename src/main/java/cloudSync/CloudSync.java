@@ -1,25 +1,30 @@
 package cloudSync;
 
+import java.util.Map;
+import java.util.Set;
+
+import com.fasterxml.jackson.databind.ObjectMapper;
+
+import java.io.InputStream;
+import java.nio.charset.StandardCharsets;
+import java.util.HashSet;
+import java.util.List;
+
+import helper.CheckInternet;
+import repository.CloudSyncRepository;
+
 public class CloudSync {
-    private static boolean isInternetAvailable() {
-        try {
-            java.net.InetAddress addr = java.net.InetAddress.getByName("8.8.8.8");
-            return addr.isReachable(2000);
-        } catch (Exception e) {
-            return false;
-        }
-    }
 
     public static void startBackgroundSync() {
 
         Thread syncThread = new Thread(() -> {
 
-            final String ENDPOINT = "http://localhost:5000/sync";
+            final String ENDPOINT = "http://localhost:8080/api/attendance/upload-batch";
 
             while (true) {
                 try {
-                    if (!isInternetAvailable()) {
-                        Thread.sleep(5000);
+                    if (!CheckInternet.isInternetAvailable()) {
+                        Thread.sleep(10000);
                         continue;
                     }
                     java.net.URI uri = java.net.URI.create(ENDPOINT);
@@ -27,30 +32,63 @@ public class CloudSync {
 
                     java.net.HttpURLConnection conn = (java.net.HttpURLConnection) url.openConnection();
 
+                    List<Map<String, Object>> payload = CloudSyncRepository.fetchPendingTransUploads();
+                    System.out.println(payload);
+
+                    if (payload.isEmpty()) {
+                        Thread.sleep(10000);
+                        continue;
+                    }
+
+                    // ----------------------api call--------------------------------
+
+                    ObjectMapper mapper = new ObjectMapper();
+
+                    String jsonPayload = mapper.writeValueAsString(payload);
+
                     conn.setRequestMethod("POST");
                     conn.setConnectTimeout(5000);
                     conn.setReadTimeout(5000);
                     conn.setDoOutput(true);
                     conn.setRequestProperty("Content-Type", "application/json");
-
-                    String payload = """
-                            {
-                              "device": "attendance-terminal-1",
-                              "timestamp": "%s"
-                            }
-                            """.formatted(java.time.Instant.now());
+                    conn.setRequestProperty("Accept", "application/json");
+                    conn.setRequestProperty("Content-Length",
+                            String.valueOf(jsonPayload.getBytes(StandardCharsets.UTF_8).length));
 
                     try (java.io.OutputStream os = conn.getOutputStream()) {
-                        os.write(payload.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+                        byte[] bytes = jsonPayload.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+                        os.write(bytes);
+
                     }
 
                     int responseCode = conn.getResponseCode();
 
+                    InputStream is;
                     if (responseCode >= 200 && responseCode < 300) {
+                        is = conn.getInputStream();
                         System.out.println("[SYNC] Upload successful");
                     } else {
+                        is = conn.getErrorStream();
                         System.err.println("[SYNC] Server error: " + responseCode);
                     }
+
+                    String responseBody = "";
+
+                    if (is != null) {
+                        responseBody = new String(
+                                is.readAllBytes(),
+                                java.nio.charset.StandardCharsets.UTF_8);
+                    }
+                    System.out.println("[SYNC] response body = " + responseBody);
+
+                    List<String> failedCardUids = mapper.readValue(responseBody,
+                            new com.fasterxml.jackson.core.type.TypeReference<List<String>>() {
+                            });
+
+                    // ---------------------------------------------------------
+
+                    Set<String> failedSet = new HashSet<>(failedCardUids);
+                    CloudSyncRepository.markUploadedExceptFailed(payload, failedSet);
 
                 } catch (Exception ex) {
                     ex.printStackTrace();

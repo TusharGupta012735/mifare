@@ -5,6 +5,7 @@ import java.sql.SQLException;
 import java.util.*;
 import java.util.concurrent.atomic.AtomicBoolean;
 
+import cloudSync.CloudSync;
 import controller.EventFormController;
 import nfc.SmartMifareReader;
 import ui.pages.EventFormPage;
@@ -21,6 +22,10 @@ import javafx.util.Duration;
 import javafx.scene.Node;
 
 public class Dashboard extends BorderPane {
+
+    public void initialize() {
+        CloudSync.startBackgroundSync();
+    }
 
     private final ScrollPane scrollPane = new ScrollPane();
 
