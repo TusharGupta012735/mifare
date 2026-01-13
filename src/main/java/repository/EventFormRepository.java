@@ -1,100 +1,152 @@
 package repository;
 
-import java.sql.Connection;
-import java.sql.DatabaseMetaData;
-import java.sql.PreparedStatement;
-import java.sql.ResultSet;
+import java.sql.*;
 import java.time.LocalDate;
 import java.time.LocalTime;
+import java.time.format.DateTimeFormatter;
 import java.util.List;
 
 import db.AccessDb;
+import model.EventFormData;
+import model.SubEventData;
 
 public class EventFormRepository {
 
-    private static final String TABLE_NAME = "Events"; 
+    /* ================== TABLE NAMES ================== */
 
-    private static final String CREATE_TABLE_SQL = """
-            CREATE TABLE Events (
-                id AUTOINCREMENT PRIMARY KEY,
-                name TEXT(255) NOT NULL,
-                venue TEXT(255),
-                event_date TEXT(20),
-                participant_type TEXT(50),
-                custom_participant_type TEXT(100),
-                entry_from TEXT(10),
-                entry_till TEXT(10),
-                locations TEXT(500),
-                created_at TEXT(30)
-            )
+    private static final String EVENTS_TABLE = "Events";
+    private static final String LOCATIONS_TABLE = "Event_Locations";
+
+    /* ================== CREATE TABLES ================== */
+
+    private static final String CREATE_EVENTS_TABLE_SQL = """
+                CREATE TABLE Events (
+                    id AUTOINCREMENT PRIMARY KEY,
+                    name TEXT(255) NOT NULL UNIQUE,
+                    venue TEXT(255),
+                    event_date TEXT(20),
+                    created_at TEXT(30)
+                )
             """;
+
+    private static final String CREATE_LOCATIONS_TABLE_SQL = """
+                CREATE TABLE Event_Locations (
+                    id AUTOINCREMENT PRIMARY KEY,
+                    event_id INTEGER NOT NULL,
+                    sub_event_name TEXT(255),
+                    location_name TEXT(255),
+                    allowed_participant_types TEXT(255),
+                    entry_from TEXT(10),
+                    entry_till TEXT(10),
+                    FOREIGN KEY (event_id) REFERENCES Events(id)
+                )
+            """;
+
+    /* ================== INSERT SQL ================== */
 
     private static final String INSERT_EVENT_SQL = """
-            INSERT INTO Events (
-                name,
-                venue,
-                event_date,
-                participant_type,
-                custom_participant_type,
-                entry_from,
-                entry_till,
-                locations
-            )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO Events (name, venue, event_date, created_at)
+                VALUES (?, ?, ?, ?)
             """;
 
-    public void insertEvent(
-            String name,
-            String venue,
-            List<String> locations,
-            LocalDate date,
-            String participantType,
-            String customParticipantType,
-            LocalTime entryFrom,
-            LocalTime entryTill) throws Exception {
+    private static final String INSERT_LOCATION_SQL = """
+                INSERT INTO Event_Locations (
+                    event_id,
+                    sub_event_name,
+                    location_name,
+                    allowed_participant_types,
+                    entry_from,
+                    entry_till
+                )
+                VALUES (?, ?, ?, ?, ?, ?)
+            """;
+
+    /* ================== PUBLIC API ================== */
+
+    public void insertFullEvent(EventFormData ev) throws Exception {
 
         try (Connection conn = AccessDb.getConnection()) {
-            ensureTableExists(conn);
+            conn.setAutoCommit(false);
 
-            // ✅ FIX 1: build CSV safely
-            String locationsCsv = null;
-            if (locations != null && !locations.isEmpty()) {
-                locationsCsv = String.join(
-                        ",",
-                        locations.stream()
-                                .map(String::trim)
-                                .filter(s -> !s.isEmpty())
-                                .toList());
+            ensureTablesExist(conn);
+
+            int eventId = insertEvent(conn, ev);
+            insertSubEvents(conn, eventId, ev.subEvents);
+
+            conn.commit();
+        }
+    }
+
+    /* ================== PRIVATE HELPERS ================== */
+
+    private int insertEvent(Connection conn, EventFormData ev) throws Exception {
+
+        try (PreparedStatement ps = conn.prepareStatement(
+                INSERT_EVENT_SQL,
+                Statement.RETURN_GENERATED_KEYS)) {
+
+            ps.setString(1, ev.name);
+            ps.setString(2, ev.venue);
+            ps.setString(3, ev.date != null ? ev.date.toString() : null);
+            ps.setString(4, LocalDate.now().toString());
+
+            ps.executeUpdate();
+
+            try (ResultSet rs = ps.getGeneratedKeys()) {
+                if (rs.next()) {
+                    return rs.getInt(1);
+                }
+            }
+        }
+
+        throw new IllegalStateException("Failed to generate Event ID");
+    }
+
+    private void insertSubEvents(
+            Connection conn,
+            int eventId,
+            List<SubEventData> subEvents) throws Exception {
+
+        try (PreparedStatement ps = conn.prepareStatement(INSERT_LOCATION_SQL)) {
+
+            for (SubEventData se : subEvents) {
+
+                String typesCsv = String.join(",", se.allowedParticipantTypes);
+
+                ps.setInt(1, eventId);
+                ps.setString(2, se.subEventName);
+                ps.setString(3, se.locationName);
+                ps.setString(4, typesCsv);
+                ps.setString(5, se.entryFrom != null ? se.entryFrom.toString() : null);
+                ps.setString(6, se.entryTill != null ? se.entryTill.toString() : null);
+
+                ps.addBatch();
             }
 
-            try (PreparedStatement ps = conn.prepareStatement(INSERT_EVENT_SQL)) {
+            ps.executeBatch();
+        }
+    }
 
-                ps.setString(1, name);
-                ps.setString(2, venue);
-                ps.setString(3, date != null ? date.toString() : null); 
-                ps.setString(4, participantType);
-                ps.setString(5, customParticipantType);
-                ps.setString(6, entryFrom != null ? entryFrom.toString() : null);
-                ps.setString(7, entryTill != null ? entryTill.toString() : null);
-                ps.setString(8, locationsCsv); 
+    private void ensureTablesExist(Connection conn) throws Exception {
 
-                ps.executeUpdate();
+        DatabaseMetaData meta = conn.getMetaData();
+
+        if (!tableExists(meta, EVENTS_TABLE)) {
+            try (PreparedStatement ps = conn.prepareStatement(CREATE_EVENTS_TABLE_SQL)) {
+                ps.execute();
+            }
+        }
+
+        if (!tableExists(meta, LOCATIONS_TABLE)) {
+            try (PreparedStatement ps = conn.prepareStatement(CREATE_LOCATIONS_TABLE_SQL)) {
+                ps.execute();
             }
         }
     }
 
-    private void ensureTableExists(Connection conn) throws Exception {
-
-        DatabaseMetaData meta = conn.getMetaData();
-
-        try (ResultSet rs = meta.getTables(null, null, TABLE_NAME, null)) {
-            if (rs.next()) {
-                return;
-            }
-        }
-
-        try (PreparedStatement ps = conn.prepareStatement(CREATE_TABLE_SQL)) {
-            ps.execute();
+    private boolean tableExists(DatabaseMetaData meta, String tableName) throws Exception {
+        try (ResultSet rs = meta.getTables(null, null, tableName, null)) {
+            return rs.next();
         }
     }
 }

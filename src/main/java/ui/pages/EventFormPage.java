@@ -6,6 +6,7 @@ import javafx.scene.Parent;
 import javafx.scene.control.*;
 import javafx.scene.layout.*;
 import model.EventFormData;
+import model.SubEventData;
 import ui.common.LoaderOverlay;
 
 import java.time.LocalDate;
@@ -18,108 +19,77 @@ public class EventFormPage {
 
     public static Parent create(Consumer<EventFormData> onSubmit) {
 
-        // ------------to get location of
-        // events--------------------------------------------------
-        List<TextField> locationFields = new ArrayList<>();
+        /* ================= EVENT FIELDS ================= */
 
-        VBox locationsBox = new VBox(8);
-        locationsBox.setPadding(new Insets(6, 0, 6, 0));
+        TextField name = new TextField();
+        name.setPromptText("Event name");
+        name.getStyleClass().add("input");
+
+        TextField venue = new TextField();
+        venue.setPromptText("Venue");
+        venue.getStyleClass().add("input");
+
+        DatePicker date = new DatePicker(LocalDate.now());
+
+        /* ================= SUB EVENTS ================= */
+
+        VBox subEventsBox = new VBox(12);
+        subEventsBox.setPadding(new Insets(6, 0, 6, 0));
+
+        List<SubEventRow> subEventRows = new ArrayList<>();
 
         Button addLocationBtn = new Button("+ Add Location");
         addLocationBtn.getStyleClass().add("btn-secondary");
 
-        Runnable addLocationField = () -> {
-            TextField tf = new TextField();
-            tf.setPromptText("Location name");
-            tf.getStyleClass().add("input");
+        Runnable addSubEventRow = () -> {
 
-            locationFields.add(tf);
-            locationsBox.getChildren().add(tf);
+            final SubEventRow[] holder = new SubEventRow[1];
+
+            holder[0] = new SubEventRow(() -> {
+                subEventsBox.getChildren().remove(holder[0]);
+                subEventRows.remove(holder[0]);
+            });
+
+            subEventRows.add(holder[0]);
+            subEventsBox.getChildren().add(holder[0]);
         };
 
-        addLocationField.run(); // add first field by default
+        addSubEventRow.run(); // first location by default
+        addLocationBtn.setOnAction(e -> addSubEventRow.run());
 
-        addLocationBtn.setOnAction(e -> addLocationField.run());
-        // ------------to get location of
-        // events--------------------------------------------------
-
-        TextField name = new TextField();
-        name.setPromptText("Event name");
-
-        TextField venue = new TextField();
-        venue.setPromptText("Venue");
-
-        DatePicker date = new DatePicker(LocalDate.now());
-
-        ComboBox<String> type = new ComboBox<>();
-        type.getItems().addAll("participant", "staff", "volunteer", "vip", "other");
-
-        name.getStyleClass().add("input");
-        venue.getStyleClass().add("input");
-        type.getStyleClass().add("input");
-
-        TextField otherType = new TextField();
-        otherType.setPromptText("Custom type");
-        otherType.setVisible(false);
-        otherType.setManaged(false);
-
-        Spinner<LocalTime> fromTime = timeSpinner();
-        Spinner<LocalTime> tillTime = timeSpinner();
-
-        type.valueProperty().addListener((o, a, v) -> {
-            boolean show = "other".equalsIgnoreCase(v);
-            otherType.setVisible(show);
-            otherType.setManaged(show);
-            if (!show)
-                otherType.clear();
-        });
+        /* ================= LAYOUT ================= */
 
         GridPane grid = new GridPane();
         grid.setHgap(12);
         grid.setVgap(14);
 
-        add(grid, 0, "Name", name);
+        add(grid, 0, "Event Name", name);
         add(grid, 1, "Venue", venue);
-        add(grid, 2, "Locations", locationsBox);
-        // grid.add(addLocationBtn, 1, 3);
-        add(grid, 3, "+Add more", addLocationBtn);
-        add(grid, 4, "Date", date);
-        add(grid, 5, "Participant Type", type);
-        add(grid, 6, "Custom Type", otherType);
-        add(grid, 7, "Entry From", fromTime);
-        add(grid, 8, "Entry Till", tillTime);
-
-        Button save = new Button("Save Event");
-        save.getStyleClass().add("btn-primary");
+        add(grid, 2, "Date", date);
+        add(grid, 3, "Locations", subEventsBox);
+        add(grid, 4, "", addLocationBtn);
 
         Label title = new Label("📅 Create Event");
         title.getStyleClass().add("page-title");
 
-        VBox root = new VBox(14, title, grid, save);
+        Button save = new Button("Save Event");
+        save.getStyleClass().add("btn-primary");
+
+        VBox root = new VBox(16, title, grid, save);
         root.setPadding(new Insets(20));
         root.setAlignment(Pos.TOP_LEFT);
-
         root.getStyleClass().add("card");
 
-        save.setOnAction(e -> {
-            if (name.getText().isBlank()) {
-                alert("Event name required");
-                return;
-            }
-            if (type.getValue() == null) {
-                alert("Participant type required");
-                return;
-            }
-            if ("other".equals(type.getValue()) && otherType.getText().isBlank()) {
-                alert("Enter custom participant type");
-                return;
-            }
-            List<String> locations = locationFields.stream()
-                    .map(tf -> tf.getText().trim())
-                    .filter(s -> !s.isEmpty())
-                    .toList();
+        /* ================= SAVE HANDLER ================= */
 
-            if (locations.isEmpty()) {
+        save.setOnAction(e -> {
+
+            if (name.getText().isBlank()) {
+                alert("Event name is required");
+                return;
+            }
+
+            if (subEventRows.isEmpty()) {
                 alert("At least one location is required");
                 return;
             }
@@ -128,11 +98,11 @@ public class EventFormPage {
             ev.name = name.getText().trim();
             ev.venue = venue.getText().trim();
             ev.date = date.getValue();
-            ev.participantType = type.getValue();
-            ev.customParticipantType = otherType.getText().trim();
-            ev.entryAllowedFrom = fromTime.getValue();
-            ev.entryAllowedTill = tillTime.getValue();
-            ev.locations = new ArrayList<>(locations);
+
+            for (SubEventRow row : subEventRows) {
+                SubEventData se = row.toData();
+                ev.subEvents.add(se);
+            }
 
             LoaderOverlay loader = (LoaderOverlay) root.getProperties().get("loader");
 
@@ -142,12 +112,13 @@ public class EventFormPage {
             new Thread(() -> {
                 try {
                     onSubmit.accept(ev);
-                    javafx.application.Platform.runLater(() -> {
-                        new Alert(Alert.AlertType.INFORMATION, "Event Saved Succesfully", ButtonType.OK).showAndWait();
-                    });
+                    javafx.application.Platform.runLater(() -> new Alert(Alert.AlertType.INFORMATION,
+                            "Event Saved Successfully",
+                            ButtonType.OK).showAndWait());
                 } catch (Exception ex) {
                     javafx.application.Platform.runLater(() -> new Alert(Alert.AlertType.ERROR,
-                            ex.getMessage(), ButtonType.OK).showAndWait());
+                            ex.getMessage(),
+                            ButtonType.OK).showAndWait());
                 } finally {
                     javafx.application.Platform.runLater(() -> {
                         loader.hide();
@@ -158,11 +129,12 @@ public class EventFormPage {
         });
 
         LoaderOverlay loader = LoaderOverlay.wrap(root);
-
         root.getProperties().put("loader", loader);
 
         return loader.getRoot();
     }
+
+    /* ================= HELPERS ================= */
 
     private static Spinner<LocalTime> timeSpinner() {
         SpinnerValueFactory<LocalTime> f = new SpinnerValueFactory<>() {
@@ -186,15 +158,94 @@ public class EventFormPage {
     }
 
     private static void add(GridPane g, int r, String l, javafx.scene.Node n) {
-        Label lbl = new Label(l + ":");
-        lbl.getStyleClass().add("form-label");
-
-        g.add(lbl, 0, r);
+        if (!l.isBlank()) {
+            Label lbl = new Label(l + ":");
+            lbl.getStyleClass().add("form-label");
+            g.add(lbl, 0, r);
+        }
         g.add(n, 1, r);
         GridPane.setHgrow(n, Priority.ALWAYS);
     }
 
     private static void alert(String msg) {
         new Alert(Alert.AlertType.WARNING, msg, ButtonType.OK).showAndWait();
+    }
+
+    /* ================= SUB EVENT ROW ================= */
+
+    private static class SubEventRow extends VBox {
+
+        TextField subEventName = new TextField();
+        TextField locationName = new TextField();
+
+        Spinner<LocalTime> from = timeSpinner();
+        Spinner<LocalTime> till = timeSpinner();
+
+        CheckBox cbParticipant = new CheckBox("Participant");
+        CheckBox cbStaff = new CheckBox("Staff");
+        CheckBox cbVolunteer = new CheckBox("Volunteer");
+        CheckBox cbVip = new CheckBox("VIP");
+        CheckBox cbOther = new CheckBox("Other");
+
+        TextField customType = new TextField();
+
+        SubEventRow(Runnable onRemove) {
+
+            setSpacing(8);
+            setPadding(new Insets(10));
+            getStyleClass().add("card");
+
+            subEventName.setPromptText("Sub-event name");
+            locationName.setPromptText("Location");
+
+            customType.setPromptText("Custom type");
+            customType.setDisable(true);
+
+            cbOther.selectedProperty().addListener((o, a, v) -> {
+                customType.setDisable(!v);
+                if (!v)
+                    customType.clear();
+            });
+
+            Button remove = new Button("Remove");
+            remove.getStyleClass().add("btn-danger");
+            remove.setOnAction(e -> onRemove.run());
+
+            getChildren().addAll(
+                    new Label("Sub Event"),
+                    subEventName,
+                    new Label("Location"),
+                    locationName,
+                    new Label("Entry Time"),
+                    new HBox(8, from, till),
+                    new Label("Allowed Participants"),
+                    new HBox(10,
+                            cbParticipant, cbStaff,
+                            cbVolunteer, cbVip, cbOther),
+                    customType,
+                    remove);
+        }
+
+        SubEventData toData() {
+
+            SubEventData se = new SubEventData();
+            se.subEventName = subEventName.getText().trim();
+            se.locationName = locationName.getText().trim();
+            se.entryFrom = from.getValue();
+            se.entryTill = till.getValue();
+
+            if (cbParticipant.isSelected())
+                se.allowedParticipantTypes.add("participant");
+            if (cbStaff.isSelected())
+                se.allowedParticipantTypes.add("staff");
+            if (cbVolunteer.isSelected())
+                se.allowedParticipantTypes.add("volunteer");
+            if (cbVip.isSelected())
+                se.allowedParticipantTypes.add("vip");
+            if (cbOther.isSelected())
+                se.allowedParticipantTypes.add("other:" + customType.getText().trim());
+
+            return se;
+        }
     }
 }

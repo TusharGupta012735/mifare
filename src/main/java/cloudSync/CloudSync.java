@@ -19,12 +19,12 @@ public class CloudSync {
 
         Thread syncThread = new Thread(() -> {
 
-            final String ENDPOINT = "http://localhost:8080/api/attendance/upload-batch";
+            final String ENDPOINT = "https://smartserv.in/bsd-dashboard/api/attendance/admin/upload-batch";
 
             while (true) {
                 try {
                     if (!CheckInternet.isInternetAvailable()) {
-                        Thread.sleep(10000);
+                        Thread.sleep(2000);
                         continue;
                     }
                     java.net.URI uri = java.net.URI.create(ENDPOINT);
@@ -36,7 +36,7 @@ public class CloudSync {
                     System.out.println(payload);
 
                     if (payload.isEmpty()) {
-                        Thread.sleep(10000);
+                        Thread.sleep(2000);
                         continue;
                     }
 
@@ -102,9 +102,7 @@ public class CloudSync {
             }
 
         }, "background-sync-thread");
-
         syncThread.setDaemon(true);
         syncThread.start();
     }
-
 }

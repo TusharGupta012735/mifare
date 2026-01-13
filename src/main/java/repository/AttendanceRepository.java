@@ -9,51 +9,53 @@ import java.util.*;
 
 public class AttendanceRepository {
 
-    private static final String FETCH_ALL_EVENTS_SQL = """
-                SELECT id, name, locations
-                FROM Events
-                ORDER BY id DESC
+    private static final String FETCH_EVENTS_WITH_LOCATIONS_SQL = """
+                SELECT
+                    e.id   AS event_id,
+                    e.name AS event_name,
+                    l.location_name
+                FROM Events e
+                LEFT JOIN Event_Locations l ON l.event_id = e.id
+                ORDER BY e.id DESC
             """;
 
     public List<EventRow> fetchAllEvents() throws Exception {
 
-        List<EventRow> list = new ArrayList<>();
+        Map<Integer, EventRow> map = new LinkedHashMap<>();
 
         try (Connection conn = AccessDb.getConnection();
-                PreparedStatement ps = conn.prepareStatement(FETCH_ALL_EVENTS_SQL);
+                PreparedStatement ps = conn.prepareStatement(FETCH_EVENTS_WITH_LOCATIONS_SQL);
                 ResultSet rs = ps.executeQuery()) {
 
             while (rs.next()) {
-                int id = rs.getInt("id");
-                String name = rs.getString("name");
-                String locationsCsv = rs.getString("locations");
 
-                List<String> locations = new ArrayList<>();
-                if (locationsCsv != null && !locationsCsv.isBlank()) {
-                    for (String s : locationsCsv.split(",")) {
-                        String t = s.trim();
-                        if (!t.isEmpty())
-                            locations.add(t);
-                    }
+                int eventId = rs.getInt("event_id");
+                String eventName = rs.getString("event_name");
+                String location = rs.getString("location_name");
+
+                EventRow row = map.computeIfAbsent(
+                        eventId,
+                        id -> new EventRow(id, eventName));
+
+                if (location != null && !location.isBlank()) {
+                    row.locations.add(location.trim());
                 }
-
-                list.add(new EventRow(id, name, locations));
             }
         }
 
-        return list;
+        return new ArrayList<>(map.values());
     }
 
-    // DTO
+    /* ================= DTO ================= */
+
     public static class EventRow {
         public final int id;
         public final String name;
-        public final List<String> locations;
+        public final List<String> locations = new ArrayList<>();
 
-        public EventRow(int id, String name, List<String> locations) {
+        public EventRow(int id, String name) {
             this.id = id;
             this.name = name;
-            this.locations = locations;
         }
     }
 }
