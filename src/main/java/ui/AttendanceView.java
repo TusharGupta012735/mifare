@@ -15,7 +15,9 @@ import java.time.format.DateTimeFormatter;
 import java.util.*;
 
 import nfc.SmartMifareReader;
-import service.AttendanceService.AttendanceEvent;
+import dto.AttendanceEvent;
+import dto.AttendanceRequest;
+import dto.AttendanceResult;
 
 import controller.AttendanceController;
 
@@ -63,6 +65,43 @@ public class AttendanceView {
     // Formatters
     private static final DateTimeFormatter DATE_FMT = DateTimeFormatter.ofPattern("yyyy-MM-dd");
     private static final DateTimeFormatter TIME_FMT = DateTimeFormatter.ofPattern("HH:mm:ss");
+
+    private void attemptMarkAttendance(String cardUid) {
+
+        AttendanceController controller = new AttendanceController();
+
+        AttendanceRequest req = new AttendanceRequest();
+        req.cardUid = cardUid;
+        req.bsguid = bsguidValue.getText();
+        req.eventId = (eventCombo.getValue() == null) ? 0 : eventCombo.getValue().id;
+        req.eventName = getEventText();
+        req.location = getLocationText();
+
+        // Avoid blocking JavaFX thread
+        new Thread(() -> {
+
+            AttendanceResult result = controller.markAttendance(req);
+
+            Platform.runLater(() -> {
+                if (result.success) {
+                    headline.setText("Attendance Marked");
+                    headline.setStyle("""
+                                -fx-font-size: 32px;
+                                -fx-font-weight: 900;
+                                -fx-text-fill: #2E7D32;
+                            """);
+                } else {
+                    headline.setText(result.message);
+                    headline.setStyle("""
+                                -fx-font-size: 28px;
+                                -fx-font-weight: 900;
+                                -fx-text-fill: #C62828;
+                            """);
+                }
+            });
+
+        }, "attendance-submit-thread").start();
+    }
 
     // Replace existing acceptReadResult(...) with this improved version
     public void acceptReadResult(SmartMifareReader.ReadResult rr) {
@@ -185,6 +224,7 @@ public class AttendanceView {
                 setTime(nowTime);
             });
         }
+        attemptMarkAttendance(uidText);
     }
 
     // ---------------- Constructor / UI ----------------

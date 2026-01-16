@@ -1,10 +1,13 @@
 package controller;
 
 import service.AttendanceService;
-import service.AttendanceService.AttendanceEvent;
 
 import java.util.Collections;
 import java.util.List;
+
+import dto.AttendanceEvent;
+import dto.AttendanceRequest;
+import dto.AttendanceResult;
 
 public class AttendanceController {
 
@@ -18,4 +21,9 @@ public class AttendanceController {
             return Collections.emptyList();
         }
     }
+
+    public AttendanceResult markAttendance(AttendanceRequest req) {
+        return service.markAttendance(req);
+    }
+
 }

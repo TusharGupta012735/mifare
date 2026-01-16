@@ -1199,65 +1199,6 @@ public class Dashboard extends BorderPane {
                             t.printStackTrace();
                         }
                     }
-
-                    // --- BLOCKING DB write: insert into trans BEFORE accepting next card ---
-                    int inserted = 0;
-                    try {
-                        String loc = (attendanceView != null ? attendanceView.getLocationText() : "(unknown)");
-                        String ev = (attendanceView != null ? attendanceView.getEventText() : "(unknown)");
-
-                        try {
-                            // IMPORTANT: AccessDb.getConnection() now synchronizes opening; keep this call
-                            // as-is
-                            inserted = db.AccessDb.insertTrans(rr.uid, loc, ev); // returns 1 on success
-                        } catch (Exception dbEx) {
-                            // Detect ClosedByInterruptException coming out of Jackcess and stop gracefully
-                            Throwable cause = dbEx;
-                            boolean isClosedByInterrupt = false;
-                            while (cause != null) {
-                                if (cause instanceof java.nio.channels.ClosedByInterruptException) {
-                                    isClosedByInterrupt = true;
-                                    break;
-                                }
-                                cause = cause.getCause();
-                            }
-                            if (isClosedByInterrupt) {
-                                // stop the poller cooperatively (DB open was interrupted)
-                                System.err.println("DB open was interrupted; stopping attendance poller gracefully.");
-                                attendancePollerRunning.set(false);
-                                inserted = 0;
-                                break;
-                            } else {
-                                dbEx.printStackTrace();
-                                inserted = 0;
-                            }
-                        }
-                    } finally {
-                        if (inserted > 0) {
-                            Platform.runLater(() -> {
-                                if (attendanceView != null) {
-                                    attendanceView.getHeadline().setText("Attendance updated");
-                                    attendanceView.getHeadline().setStyle("""
-                                                -fx-font-size: 28px;
-                                                -fx-font-weight: 900;
-                                                -fx-text-fill: #2E7D32;
-                                            """);
-                                }
-                            });
-                        } else {
-                            Platform.runLater(() -> {
-                                if (attendanceView != null) {
-                                    attendanceView.getHeadline().setText("Card not registered");
-                                    attendanceView.getHeadline().setStyle("""
-                                                -fx-font-size: 28px;
-                                                -fx-font-weight: 900;
-                                                -fx-text-fill: #D32F2F;
-                                            """);
-                                }
-                            });
-                        }
-                    }
-
                     // Prompt removal and block until absent (prevents processing next card)
                     showRemovePrompt();
                     boolean absentConfirmed = SmartMifareReader.waitForCardAbsent(0); // 0 = wait forever
