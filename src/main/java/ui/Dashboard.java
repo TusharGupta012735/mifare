@@ -1178,10 +1178,18 @@ public class Dashboard extends BorderPane {
                 try {
                     // use a short timeout so the thread checks the running flag often
                     rr = SmartMifareReader.readUIDWithData(PROBE_TIMEOUT_MS);
+
+                    // Security check: gracefully handle null ReadResult
+                    if (rr == null) {
+                        continue;
+                    }
+
+                    System.out.println(rr.data);
                 } catch (Throwable t) {
                     // swallow and continue if still running
                     // if the error is fatal you may want to log it
                     t.printStackTrace();
+                    continue;
                 }
 
                 if (!attendancePollerRunning.get() || !onAttendanceTab.get()) {

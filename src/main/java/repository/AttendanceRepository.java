@@ -8,7 +8,8 @@ import java.util.*;
 
 public class AttendanceRepository {
 
-    // list of all events fetched during attendance page reload
+    /* ================= EVENTS ================= */
+
     private static final String FETCH_EVENTS_WITH_LOCATIONS_SQL = """
                 SELECT
                     e.id   AS event_id,
@@ -28,43 +29,40 @@ public class AttendanceRepository {
                 ResultSet rs = ps.executeQuery()) {
 
             while (rs.next()) {
-
                 int eventId = rs.getInt("event_id");
                 String eventName = rs.getString("event_name");
                 String location = rs.getString("location_name");
 
                 EventRow row = map.computeIfAbsent(
-                        eventId,
-                        id -> new EventRow(id, eventName));
+                        eventId, id -> new EventRow(id, eventName));
 
                 if (location != null && !location.isBlank()) {
                     row.locations.add(location.trim());
                 }
             }
         }
-
         return new ArrayList<>(map.values());
     }
 
-    // get details of participant by BSGUID
+    /* ================= PARTICIPANT ================= */
 
-    private static final String FETCH_PARTICIPANT_SQL = """
+    private static final String FETCH_PARTICIPANT_BY_CARD_UID_SQL = """
                 SELECT
                     FullName,
                     BSGUID,
-                    participationType,
+                    ParticipationType,
                     CardUID,
                     status
                 FROM ParticipantsRecord
-                WHERE BSGUID = ?
+                WHERE CardUID = ?
             """;
 
-    public ParticipantRow findParticipantByBSGUID(String bsguid) throws Exception {
+    public ParticipantRow findParticipantByCardUid(String cardUid) throws Exception {
 
         try (Connection conn = AccessDb.getConnection();
-                PreparedStatement ps = conn.prepareStatement(FETCH_PARTICIPANT_SQL)) {
+                PreparedStatement ps = conn.prepareStatement(FETCH_PARTICIPANT_BY_CARD_UID_SQL)) {
 
-            ps.setString(1, bsguid);
+            ps.setString(1, cardUid);
 
             try (ResultSet rs = ps.executeQuery()) {
 
@@ -74,16 +72,15 @@ public class AttendanceRepository {
                 ParticipantRow p = new ParticipantRow();
                 p.fullName = rs.getString("FullName");
                 p.bsguid = rs.getString("BSGUID");
-                p.participationType = rs.getString("participationType");
+                p.participationType = rs.getString("ParticipationType");
                 p.cardUid = rs.getString("CardUID");
                 p.status = rs.getString("status");
-
                 return p;
             }
         }
     }
 
-    // Fetch event rules
+    /* ================= EVENT RULE ================= */
 
     private static final String FETCH_EVENT_LOCATION_RULE_SQL = """
                 SELECT
@@ -113,18 +110,17 @@ public class AttendanceRepository {
                 rule.allowedParticipantTypes = rs.getString("allowed_participant_types");
                 rule.entryFrom = rs.getString("entry_from");
                 rule.entryTill = rs.getString("entry_till");
-
                 return rule;
             }
         }
     }
 
-    // to check if attendance exists already
+    /* ================= ATTENDANCE ================= */
 
     private static final String CHECK_DUPLICATE_SQL = """
                 SELECT 1
-                FROM Attendance
-                WHERE BSGUID = ?
+                FROM trans
+                WHERE bsguid = ?
                   AND event = ?
                   AND date_time LIKE ?
             """;
@@ -144,13 +140,35 @@ public class AttendanceRepository {
         }
     }
 
-    // insert attendance record
+    private static final String FETCH_LAST_ATTENDANCE_SQL = """
+                SELECT TOP 1 date_time
+                FROM trans
+                WHERE bsguid = ?
+                  AND event = ?
+                  AND location = ?
+                ORDER BY date_time DESC
+            """;
+
+    public String fetchLastAttendanceTime(String bsguid, String eventName, String location) throws Exception {
+
+        try (Connection conn = AccessDb.getConnection();
+                PreparedStatement ps = conn.prepareStatement(FETCH_LAST_ATTENDANCE_SQL)) {
+
+            ps.setString(1, bsguid);
+            ps.setString(2, eventName);
+            ps.setString(3, location);
+
+            try (ResultSet rs = ps.executeQuery()) {
+                return rs.next() ? rs.getString("date_time") : null;
+            }
+        }
+    }
 
     private static final String INSERT_ATTENDANCE_SQL = """
-                INSERT INTO Attendance (
+                INSERT INTO trans (
                     carduid,
                     bsguid,
-                    full_name,
+                    fullname,
                     date_time,
                     location,
                     event,
@@ -175,7 +193,7 @@ public class AttendanceRepository {
         }
     }
 
-    // insert denied attendance with reason
+    /* ================= DENIED ================= */
 
     private static final String INSERT_DENIED_SQL = """
                 INSERT INTO Attendance_Denied (
@@ -215,32 +233,4 @@ public class AttendanceRepository {
             ps.executeUpdate();
         }
     }
-
-    // to fetch last attendance time for participant in an event
-    
-    private static final String FETCH_LAST_ATTENDANCE_SQL = """
-                SELECT TOP 1 date_time
-                FROM Attendance
-                WHERE BSGUID = ?
-                  AND event = ?
-                ORDER BY date_time DESC
-            """;
-
-    public String fetchLastAttendanceTime(String bsguid, String eventName) throws Exception {
-
-        try (Connection conn = AccessDb.getConnection();
-                PreparedStatement ps = conn.prepareStatement(FETCH_LAST_ATTENDANCE_SQL)) {
-
-            ps.setString(1, bsguid);
-            ps.setString(2, eventName);
-
-            try (ResultSet rs = ps.executeQuery()) {
-                if (rs.next()) {
-                    return rs.getString("date_time");
-                }
-                return null;
-            }
-        }
-    }
-
 }

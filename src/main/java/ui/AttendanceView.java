@@ -66,21 +66,26 @@ public class AttendanceView {
     private static final DateTimeFormatter DATE_FMT = DateTimeFormatter.ofPattern("yyyy-MM-dd");
     private static final DateTimeFormatter TIME_FMT = DateTimeFormatter.ofPattern("HH:mm:ss");
 
-    private void attemptMarkAttendance(String cardUid) {
+    private void attemptMarkAttendance(String cardUid, String extractedBsguid) {
 
         AttendanceController controller = new AttendanceController();
 
         AttendanceRequest req = new AttendanceRequest();
         req.cardUid = cardUid;
-        req.bsguid = bsguidValue.getText();
+        req.bsguid = extractedBsguid != null ? extractedBsguid : bsguidValue.getText();
         req.eventId = (eventCombo.getValue() == null) ? 0 : eventCombo.getValue().id;
         req.eventName = getEventText();
         req.location = getLocationText();
+
+        System.out.println("[AttendanceView] Attempting to mark attendance - cardUid=" + cardUid + ", bsguid="
+                + req.bsguid + ", eventId=" + req.eventId + ", event=" + req.eventName + ", location=" + req.location);
 
         // Avoid blocking JavaFX thread
         new Thread(() -> {
 
             AttendanceResult result = controller.markAttendance(req);
+            System.out.println("[AttendanceView] Attendance result received - success=" + result.success + ", message="
+                    + result.message);
 
             Platform.runLater(() -> {
                 if (result.success) {
@@ -103,128 +108,141 @@ public class AttendanceView {
         }, "attendance-submit-thread").start();
     }
 
-    // Replace existing acceptReadResult(...) with this improved version
     public void acceptReadResult(SmartMifareReader.ReadResult rr) {
-        if (rr == null) {
-            Platform.runLater(this::clearDetails);
+        // Exit gracefully if ReadResult is null or UID is not populated
+        if (rr == null || rr.uid == null || rr.uid.isBlank()) {
             return;
         }
 
-        // 1) Update UID display immediately
-        final String uidText = (rr.uid == null || rr.uid.isBlank()) ? "(no uid)" : rr.uid;
+        // Only log and process when we have a valid UID
+        final String uidText = rr.uid;
+        System.out.println("[AttendanceView] Card tapped - UID: " + uidText);
         Platform.runLater(() -> getUidLabel().setText("UID: " + uidText));
 
-        // 2) Try to extract a payload string from common ReadResult fields (robust)
-        String csv = null;
+        // 2) Lookup participant from database using cardUid to get the BSGUID
+        // This is done in a background thread to avoid blocking UI
+        new Thread(() -> {
+            AttendanceController controller = new AttendanceController();
+            dto.ParticipantRow participant = controller.lookupParticipantByCardUid(uidText);
 
-        // reflection: field 'data' or 'text'
-        try {
-            java.lang.reflect.Field f = rr.getClass().getField("data");
-            Object val = f.get(rr);
-            if (val != null)
-                csv = String.valueOf(val);
-        } catch (Throwable ignored) {
-        }
-
-        if ((csv == null || csv.isBlank())) {
-            try {
-                java.lang.reflect.Field f = rr.getClass().getField("text");
-                Object val = f.get(rr);
-                if (val != null)
-                    csv = String.valueOf(val);
-            } catch (Throwable ignored) {
+            if (participant == null) {
+                System.out.println(
+                        "[AttendanceView] Card UID not found in database - card is not assigned to any participant");
+                final String nowDate = java.time.LocalDate.now().format(DATE_FMT);
+                final String nowTime = java.time.LocalTime.now().format(TIME_FMT);
+                Platform.runLater(() -> {
+                    fullNameValue.setText("(unregistered)");
+                    bsguidValue.setText("(card not assigned)");
+                    dateValue.setText(nowDate);
+                    timeValue.setText(nowTime);
+                });
+                attemptMarkAttendance(uidText, null);
+                return;
             }
-        }
 
-        // reflection: getter getData() / getText()
-        if ((csv == null || csv.isBlank())) {
-            try {
-                java.lang.reflect.Method m = rr.getClass().getMethod("getData");
-                Object val = m.invoke(rr);
-                if (val != null)
-                    csv = String.valueOf(val);
-            } catch (Throwable ignored) {
-            }
-        }
-        if ((csv == null || csv.isBlank())) {
-            try {
-                java.lang.reflect.Method m = rr.getClass().getMethod("getText");
-                Object val = m.invoke(rr);
-                if (val != null)
-                    csv = String.valueOf(val);
-            } catch (Throwable ignored) {
-            }
-        }
-
-        // If still blank, inspect toString() (often contains "data=..." or "text=...")
-        if ((csv == null || csv.isBlank())) {
-            try {
-                String s = rr.toString();
-                if (s != null && !s.isBlank()) {
-                    // Try to extract data=... or text=... inside the toString output
-                    // Accept quoted or unquoted values; stop at comma or closing brace.
-                    java.util.regex.Pattern p = java.util.regex.Pattern
-                            .compile("(?:\\bdata\\b|\\btext\\b)\\s*=\\s*(\"([^\"]*)\"|([^,}\\]]+))",
-                                    java.util.regex.Pattern.CASE_INSENSITIVE);
-                    java.util.regex.Matcher m = p.matcher(s);
-                    if (m.find()) {
-                        String quoted = m.group(2);
-                        String unquoted = m.group(3);
-                        csv = (quoted != null) ? quoted : (unquoted != null ? unquoted.trim() : null);
-                    } else {
-                        // If no explicit data= found, but the toString looks like 'ReadResult{...}'
-                        // try to extract the first quoted block or the first key=value payload inside
-                        // braces.
-                        // First try anything inside braces
-                        int open = s.indexOf('{');
-                        int close = s.lastIndexOf('}');
-                        if (open >= 0 && close > open) {
-                            String inner = s.substring(open + 1, close);
-                            // If inner contains an equals sign, treat it as key=value pairs and let
-                            // updateFromCardCsv parse
-                            if (inner.contains("=")) {
-                                csv = inner.trim();
-                            } else {
-                                // otherwise try to find a quoted substring
-                                java.util.regex.Matcher q = java.util.regex.Pattern.compile("\"([^\"]+)\"")
-                                        .matcher(inner);
-                                if (q.find()) {
-                                    csv = q.group(1);
-                                } else {
-                                    // as a last resort, take the whole inner content if short
-                                    if (inner.length() < 512)
-                                        csv = inner.trim();
-                                }
-                            }
-                        }
-                    }
-                }
-            } catch (Throwable ignored) {
-            }
-        }
-
-        // 3) If we got something that looks useful, parse it into fields; otherwise
-        // just update time/date
-        if (csv != null && !csv.isBlank()) {
-            // guard against accidental "__CSV__" like keys being used as the name
-            if ("__CSV__".equalsIgnoreCase(csv.trim())) {
-                // ignore as payload
-                csv = null;
-            }
-        }
-
-        if (csv != null && !csv.isBlank()) {
-            updateFromCardCsv(csv);
-        } else {
-            // still update date/time even if we didn't get card payload
+            // Participant found - update UI with data from database
+            final String finalFullName = participant.fullName;
+            final String finalBsguid = participant.bsguid;
             final String nowDate = java.time.LocalDate.now().format(DATE_FMT);
             final String nowTime = java.time.LocalTime.now().format(TIME_FMT);
+
             Platform.runLater(() -> {
-                setDate(nowDate);
-                setTime(nowTime);
+                fullNameValue.setText(finalFullName == null || finalFullName.isBlank() ? "(empty)" : finalFullName);
+                bsguidValue.setText(finalBsguid == null || finalBsguid.isBlank() ? "(empty)" : finalBsguid);
+                dateValue.setText(nowDate);
+                timeValue.setText(nowTime);
             });
+
+            // Attempt attendance marking with BSGUID from database
+            attemptMarkAttendance(uidText, finalBsguid);
+        }, "card-lookup-thread").start();
+    }
+
+    // Extract BSGUID directly from CSV data for immediate use in attendance marking
+    // NOTE: This method is no longer used - BSGUID is now fetched directly from
+    // database using cardUid
+    @Deprecated
+    private String extractBsguidFromCsv(String csv) {
+        if (csv == null) {
+            return null;
         }
-        attemptMarkAttendance(uidText);
+
+        // Trim and normalize whitespace/newlines
+        String normalized = csv.trim();
+
+        // If the input looks like a wrapper "ReadResult{...}" extract inner part
+        if (normalized.startsWith("ReadResult") && normalized.contains("{") && normalized.contains("}")) {
+            int open = normalized.indexOf('{');
+            int close = normalized.lastIndexOf('}');
+            if (open >= 0 && close > open) {
+                normalized = normalized.substring(open + 1, close).trim();
+            }
+        }
+
+        // If the string looks like JSON (starts with {) try simple JSON-ish parse
+        if (normalized.startsWith("{") && normalized.endsWith("}")) {
+            String inner = normalized.substring(1, normalized.length() - 1);
+            for (String token : inner.split("[,\\n\\r]+")) {
+                String k = null;
+                String v = null;
+                if (!token.contains("=") && token.contains(":")) {
+                    // allow "key":"value" style
+                    String[] kv = token.split(":", 2);
+                    if (kv.length == 2) {
+                        k = kv[0].replaceAll("[\"{}\\[\\]]", "").trim().toLowerCase();
+                        v = kv[1].replaceAll("[\"{}\\[\\]]", "").trim();
+                    }
+                } else if (token.contains("=")) {
+                    String[] kv = token.split("=", 2);
+                    k = kv[0].replaceAll("[\"{}\\[\\]]", "").trim().toLowerCase();
+                    v = kv[1].replaceAll("[\"{}\\[\\]]", "").trim();
+                }
+
+                if (k != null && ("bsguid".equals(k) || "id".equals(k) || "uid".equals(k))) {
+                    if (v != null) {
+                        v = v.replaceAll("\\s+", "");
+                        return v.isBlank() ? null : v;
+                    }
+                }
+            }
+        }
+
+        // If it contains key=value pairs separated by commas/newlines, parse into map
+        if (normalized.contains("=")) {
+            String[] tokens = normalized.split("[,\\r\\n]+");
+            for (String t : tokens) {
+                String[] kv = t.split("=", 2);
+                if (kv.length == 2) {
+                    String k = kv[0].trim().toLowerCase();
+                    String v = kv[1].trim();
+                    // strip surrounding quotes if present
+                    if (v.length() >= 2 && ((v.startsWith("\"") && v.endsWith("\""))
+                            || (v.startsWith("'") && v.endsWith("'")))) {
+                        v = v.substring(1, v.length() - 1);
+                    }
+                    if ("bsguid".equals(k) || "id".equals(k) || "uid".equals(k)) {
+                        v = v.replaceAll("\\s+", "");
+                        return v.isBlank() ? null : v;
+                    }
+                }
+            }
+        }
+
+        // If it looks like quoted string "first,last,..." extract inside quotes
+        java.util.regex.Matcher quoted = java.util.regex.Pattern.compile("^\\s*\"([^\"]+)\"\\s*$")
+                .matcher(normalized);
+        if (quoted.find()) {
+            normalized = quoted.group(1);
+        }
+
+        // Fallback to simple positional CSV parsing (second field -> bsguid)
+        String[] parts = normalized.split("[,\\r\\n]+");
+        if (parts.length >= 2) {
+            String parsedBsguid = parts[1].trim().replaceAll("\\s+", "");
+            return parsedBsguid.isBlank() ? null : parsedBsguid;
+        }
+
+        return null;
     }
 
     // ---------------- Constructor / UI ----------------
