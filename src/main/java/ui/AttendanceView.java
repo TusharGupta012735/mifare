@@ -31,8 +31,6 @@ public class AttendanceView {
     private static final String HEADING_BG_COLOR = "#1c56aeff";
 
     private volatile String locationText = "(unknown)";
-    private volatile String eventText = "(unknown)";
-
     // Scaling limits for dynamic typography
     private static final double BASE_HEADING_FONT = 15.0;
     private static final double BASE_VALUE_FONT = 16.0;
@@ -156,93 +154,6 @@ public class AttendanceView {
             // Attempt attendance marking with BSGUID from database
             attemptMarkAttendance(uidText, finalBsguid);
         }, "card-lookup-thread").start();
-    }
-
-    // Extract BSGUID directly from CSV data for immediate use in attendance marking
-    // NOTE: This method is no longer used - BSGUID is now fetched directly from
-    // database using cardUid
-    @Deprecated
-    private String extractBsguidFromCsv(String csv) {
-        if (csv == null) {
-            return null;
-        }
-
-        // Trim and normalize whitespace/newlines
-        String normalized = csv.trim();
-
-        // If the input looks like a wrapper "ReadResult{...}" extract inner part
-        if (normalized.startsWith("ReadResult") && normalized.contains("{") && normalized.contains("}")) {
-            int open = normalized.indexOf('{');
-            int close = normalized.lastIndexOf('}');
-            if (open >= 0 && close > open) {
-                normalized = normalized.substring(open + 1, close).trim();
-            }
-        }
-
-        // If the string looks like JSON (starts with {) try simple JSON-ish parse
-        if (normalized.startsWith("{") && normalized.endsWith("}")) {
-            String inner = normalized.substring(1, normalized.length() - 1);
-            for (String token : inner.split("[,\\n\\r]+")) {
-                String k = null;
-                String v = null;
-                if (!token.contains("=") && token.contains(":")) {
-                    // allow "key":"value" style
-                    String[] kv = token.split(":", 2);
-                    if (kv.length == 2) {
-                        k = kv[0].replaceAll("[\"{}\\[\\]]", "").trim().toLowerCase();
-                        v = kv[1].replaceAll("[\"{}\\[\\]]", "").trim();
-                    }
-                } else if (token.contains("=")) {
-                    String[] kv = token.split("=", 2);
-                    k = kv[0].replaceAll("[\"{}\\[\\]]", "").trim().toLowerCase();
-                    v = kv[1].replaceAll("[\"{}\\[\\]]", "").trim();
-                }
-
-                if (k != null && ("bsguid".equals(k) || "id".equals(k) || "uid".equals(k))) {
-                    if (v != null) {
-                        v = v.replaceAll("\\s+", "");
-                        return v.isBlank() ? null : v;
-                    }
-                }
-            }
-        }
-
-        // If it contains key=value pairs separated by commas/newlines, parse into map
-        if (normalized.contains("=")) {
-            String[] tokens = normalized.split("[,\\r\\n]+");
-            for (String t : tokens) {
-                String[] kv = t.split("=", 2);
-                if (kv.length == 2) {
-                    String k = kv[0].trim().toLowerCase();
-                    String v = kv[1].trim();
-                    // strip surrounding quotes if present
-                    if (v.length() >= 2 && ((v.startsWith("\"") && v.endsWith("\""))
-                            || (v.startsWith("'") && v.endsWith("'")))) {
-                        v = v.substring(1, v.length() - 1);
-                    }
-                    if ("bsguid".equals(k) || "id".equals(k) || "uid".equals(k)) {
-                        v = v.replaceAll("\\s+", "");
-                        return v.isBlank() ? null : v;
-                    }
-                }
-            }
-        }
-
-        // If it looks like quoted string "first,last,..." extract inside quotes
-        java.util.regex.Matcher quoted = java.util.regex.Pattern.compile("^\\s*\"([^\"]+)\"\\s*$")
-                .matcher(normalized);
-        if (quoted.find()) {
-            normalized = quoted.group(1);
-        }
-
-        // Fallback to simple positional CSV parsing (second field -> bsguid)
-        String[] parts = normalized.split("[,\\r\\n]+");
-        if (parts.length >= 2) {
-            String parsedBsguid = parts[1].trim().replaceAll("\\s+", "");
-            return parsedBsguid.isBlank() ? null : parsedBsguid;
-        }
-
-        return null;
     }
 
     // ---------------- Constructor / UI ----------------
@@ -385,8 +296,6 @@ public class AttendanceView {
         eventCombo.valueProperty().addListener((obs, oldEv, newEv) -> {
 
             LAST_EVENT = newEv; // ✅ remember event
-            eventText = (newEv == null) ? "(unknown)" : newEv.name;
-
             locationCombo.getItems().clear();
             locationCombo.setValue(null);
             locationCombo.setDisable(true);
