@@ -33,4 +33,7 @@ public final class DenialReason {
     public static final String INVALID_CARD_DATA = "INVALID_CARD_DATA";
 
     public static final String INTERNAL_ERROR = "INTERNAL_ERROR";
+
+    public static final String EXIT_WITHOUT_ENTRY = "EXIT_WITHOUT_ENTRY";
+
 }

@@ -6,4 +6,5 @@ public class AttendanceRequest {
     public int eventId;
     public String eventName;
     public String location;
+    public String mode;
 }

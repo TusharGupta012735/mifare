@@ -64,6 +64,11 @@ public class AttendanceView {
     private static final DateTimeFormatter DATE_FMT = DateTimeFormatter.ofPattern("yyyy-MM-dd");
     private static final DateTimeFormatter TIME_FMT = DateTimeFormatter.ofPattern("HH:mm:ss");
 
+    // entry-exit toggle
+    private ToggleButton entryBtn;
+    private ToggleButton exitBtn;
+    private ToggleGroup typeGroup;
+
     private void attemptMarkAttendance(String cardUid, String extractedBsguid) {
 
         AttendanceController controller = new AttendanceController();
@@ -74,9 +79,10 @@ public class AttendanceView {
         req.eventId = (eventCombo.getValue() == null) ? 0 : eventCombo.getValue().id;
         req.eventName = getEventText();
         req.location = getLocationText();
+        req.mode = (typeGroup.getSelectedToggle() == entryBtn) ? "ENTRY" : "EXIT";
 
         System.out.println("[AttendanceView] Attempting to mark attendance - cardUid=" + cardUid + ", bsguid="
-                + req.bsguid + ", eventId=" + req.eventId + ", event=" + req.eventName + ", location=" + req.location);
+                + req.bsguid + ", eventId=" + req.eventId + ", event=" + req.eventName + ", location=" + req.location + ", mode=" + req.mode);
 
         // Avoid blocking JavaFX thread
         new Thread(() -> {
@@ -158,6 +164,47 @@ public class AttendanceView {
 
     // ---------------- Constructor / UI ----------------
     public AttendanceView() {
+
+        // --- NEW: Entry/Exit Toggle ---
+        entryBtn = new ToggleButton("ENTRY");
+        exitBtn = new ToggleButton("EXIT");
+        typeGroup = new ToggleGroup();
+
+        entryBtn.setToggleGroup(typeGroup);
+        exitBtn.setToggleGroup(typeGroup);
+
+        // Define Styles
+        String baseStyle = "-fx-font-weight: bold; -fx-font-size: 14px; -fx-pref-width: 100px; -fx-padding: 8px;";
+        String entryRadius = "-fx-background-radius: 20 0 0 20;";
+        String exitRadius = "-fx-background-radius: 0 20 20 0;";
+
+        String entryActive = baseStyle + entryRadius + "-fx-background-color: #2E7D32; -fx-text-fill: white;";
+        String exitActive = baseStyle + exitRadius + "-fx-background-color: #C62828; -fx-text-fill: white;";
+        String inactiveEntry = baseStyle + entryRadius + "-fx-background-color: #e0e0e0; -fx-text-fill: #757575;";
+        String inactiveExit = baseStyle + exitRadius + "-fx-background-color: #e0e0e0; -fx-text-fill: #757575;";
+
+        // Set Default State (Entry Selected)
+        entryBtn.setSelected(true);
+        entryBtn.setStyle(entryActive);
+        exitBtn.setStyle(inactiveExit);
+
+        // Logic to change colors based on selection
+        typeGroup.selectedToggleProperty().addListener((obs, oldVal, newVal) -> {
+            if (newVal == entryBtn) {
+                entryBtn.setStyle(entryActive);
+                exitBtn.setStyle(inactiveExit);
+            } else if (newVal == exitBtn) {
+                exitBtn.setStyle(exitActive);
+                entryBtn.setStyle(inactiveEntry);
+            } else if (newVal == null) {
+                // Prevent unselecting both - keeps at least one button pressed
+                oldVal.setSelected(true);
+            }
+        });
+
+        HBox toggleBox = new HBox(0, entryBtn, exitBtn);
+        toggleBox.setAlignment(Pos.CENTER);
+        toggleBox.setPadding(new Insets(5, 0, 5, 0));
         headline = new Label("Tap your card");
         headline.setStyle("""
                 -fx-font-size: 32px;
@@ -272,7 +319,7 @@ public class AttendanceView {
                 """);
 
         // Put both cards in a VBox (top card then details card)
-        root = new VBox(12, topCard, detailsCardWrap);
+        root = new VBox(12, toggleBox, topCard, detailsCardWrap);
         root.setFillWidth(true);
         root.setPadding(new Insets(10));
 

@@ -191,4 +191,58 @@ public class AttendanceService {
         return p;
     }
 
+    public AttendanceResult markExit(AttendanceRequest req) {
+
+        LocalDateTime now = LocalDateTime.now();
+        String nowTs = now.format(DT_FMT);
+
+        try {
+            if (req.cardUid == null || req.cardUid.isBlank()) {
+                return AttendanceResult.denied("Invalid card");
+            }
+
+            if (req.eventId <= 0) {
+                deny(req, DenialReason.EVENT_NOT_SELECTED, null, null);
+                return AttendanceResult.denied("Event not selected");
+            }
+
+            if (req.location == null || req.location.isBlank()) {
+                deny(req, DenialReason.LOCATION_NOT_SELECTED, null, null);
+                return AttendanceResult.denied("Location not selected");
+            }
+
+            ParticipantRow p = repo.findParticipantByCardUid(req.cardUid);
+            if (p == null) {
+                deny(req, DenialReason.PARTICIPANT_NOT_FOUND, null, null);
+                return AttendanceResult.denied("Participant not found");
+            }
+
+            EventLocationRule rule = repo.findEventLocationRule(req.eventId, req.location);
+            if (rule == null) {
+                deny(req, DenialReason.LOCATION_NOT_SELECTED, p, null);
+                return AttendanceResult.denied("Invalid location");
+            }
+
+            // find today's latest entry row where exit is not done
+            Integer openId = repo.findOpenEntryId(
+                    p.bsguid,
+                    req.eventName,
+                    req.location,
+                    LocalDate.now().toString());
+
+            if (openId == null) {
+                deny(req, DenialReason.EXIT_WITHOUT_ENTRY, p, rule);
+                return AttendanceResult.denied("No open entry found / already exited");
+            }
+
+            repo.updateExitTime(openId, nowTs);
+            return AttendanceResult.success();
+
+        } catch (Exception ex) {
+            ex.printStackTrace();
+            deny(req, DenialReason.INTERNAL_ERROR, null, null);
+            return AttendanceResult.denied("Internal error");
+        }
+    }
+
 }

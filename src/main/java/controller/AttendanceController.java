@@ -53,18 +53,31 @@ public class AttendanceController {
 
     public AttendanceResult markAttendance(AttendanceRequest req) {
 
+        AttendanceResult result = new AttendanceResult();;
+
         if (req == null) {
             System.out.println("[AttendanceController] markAttendance called with null request");
             return AttendanceResult.denied("Invalid request");
+        }
+        if (req.mode == null || req.mode.isBlank()) {
+            req.mode = "ENTRY"; // safe default
         }
 
         System.out.println("[AttendanceController] markAttendance called"
                 + " | cardUid=" + req.cardUid
                 + " | eventId=" + req.eventId
                 + " | event=" + req.eventName
-                + " | location=" + req.location);
+                + " | location=" + req.location
+                + " | mode=" + req.mode);
 
-        AttendanceResult result = service.markAttendance(req);
+        if(req.mode.equals("EXIT")){
+            System.out.println("[AttendanceController] markAttendance in EXIT mode");
+            result = service.markExit(req);
+        }
+        else{
+            System.out.println("[AttendanceController] markAttendance in ENTRY mode");
+            result = service.markAttendance(req);
+        }
 
         System.out.println("[AttendanceController] markAttendance result"
                 + " | success=" + result.success

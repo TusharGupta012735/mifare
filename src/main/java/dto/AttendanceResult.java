@@ -4,6 +4,11 @@ public class AttendanceResult {
     public final boolean success;
     public final String message;
 
+    public AttendanceResult() {
+        this.success = false;
+        this.message = "";
+    }
+
     private AttendanceResult(boolean success, String message) {
         this.success = success;
         this.message = message;

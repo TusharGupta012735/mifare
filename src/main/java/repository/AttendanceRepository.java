@@ -208,8 +208,9 @@ public class AttendanceRepository {
                     participant_type,
                     entry_from,
                     entry_till,
-                    created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    created_at,
+                    uploadstatus
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """;
 
     public void insertDeniedAttendance(DeniedAttendanceRow row) throws Exception {
@@ -229,8 +230,66 @@ public class AttendanceRepository {
             ps.setString(10, row.entryFrom);
             ps.setString(11, row.entryTill);
             ps.setString(12, row.createdAt);
+            ps.setInt(13, 0);
 
             ps.executeUpdate();
         }
     }
+
+    private static final String FIND_LATEST_ENTRY_ID_SQL = """
+            SELECT TOP 1 id, exit_time
+            FROM trans
+            WHERE bsguid = ?
+              AND event = ?
+              AND location = ?
+              AND date_time LIKE ?
+            ORDER BY date_time DESC
+            """;
+
+    public Integer findOpenEntryId(String bsguid, String eventName, String location, String datePrefix)
+            throws Exception {
+
+        try (Connection conn = AccessDb.getConnection();
+                PreparedStatement ps = conn.prepareStatement(FIND_LATEST_ENTRY_ID_SQL)) {
+
+            ps.setString(1, bsguid);
+            ps.setString(2, eventName);
+            ps.setString(3, location);
+            ps.setString(4, datePrefix + "%"); // yyyy-MM-dd%
+
+            try (ResultSet rs = ps.executeQuery()) {
+                if (!rs.next())
+                    return null;
+
+                String exitTime = rs.getString("exit_time");
+                if (exitTime != null && !exitTime.isBlank()) {
+                    // already exited
+                    return null;
+                }
+
+                return rs.getInt("id");
+            }
+        }
+    }
+
+    private static final String UPDATE_EXIT_SQL = """
+            UPDATE trans
+            SET exit_time = ?,
+                exit_status = ?
+            WHERE id = ?
+            """;
+
+    public void updateExitTime(int id, String exitTs) throws Exception {
+
+        try (Connection conn = AccessDb.getConnection();
+                PreparedStatement ps = conn.prepareStatement(UPDATE_EXIT_SQL)) {
+
+            ps.setString(1, exitTs);
+            ps.setString(2, "1"); // exited
+            ps.setInt(3, id);
+
+            ps.executeUpdate();
+        }
+    }
+
 }

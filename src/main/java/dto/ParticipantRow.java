@@ -6,4 +6,6 @@ public class ParticipantRow {
     public String participationType;
     public String cardUid;
     public String status;
+    public String exittime;
+    public String exitstatus;
 }

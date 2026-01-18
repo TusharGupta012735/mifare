@@ -1,6 +1,7 @@
 package ui;
 
 import cloudSync.CloudSync;
+import cloudSync.CloudSyncDenied;
 import javafx.application.Application;
 import javafx.scene.Scene;
 import javafx.scene.layout.BorderPane;
@@ -15,6 +16,7 @@ public class MainUI extends Application {
         root.setCenter(dashboard);
 
         CloudSync.startBackgroundSync();
+        CloudSyncDenied.startBackgroundSync();
         
         Scene scene = new Scene(root, 800, 600);
         stage.setScene(scene);

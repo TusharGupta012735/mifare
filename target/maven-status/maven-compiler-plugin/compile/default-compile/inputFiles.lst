@@ -10,6 +10,7 @@ C:\Users\kamal\Desktop\mifare\src\main\java\util\Main.java
 C:\Users\kamal\Desktop\mifare\src\main\java\dto\AttendanceInsertRow.java
 C:\Users\kamal\Desktop\mifare\src\main\java\nfc\SmartMifareReader.java
 C:\Users\kamal\Desktop\mifare\src\main\java\ui\MainUI.java
+C:\Users\kamal\Desktop\mifare\src\main\java\repository\CloudSyncDeniedRepository.java
 C:\Users\kamal\Desktop\mifare\src\main\java\repository\EventFormRepository.java
 C:\Users\kamal\Desktop\mifare\src\main\java\ui\pages\EventFormPage.java
 C:\Users\kamal\Desktop\mifare\src\main\java\util\DebugLog.java
@@ -33,5 +34,6 @@ C:\Users\kamal\Desktop\mifare\src\main\java\dto\EventLocationRule.java
 C:\Users\kamal\Desktop\mifare\src\main\java\ui\common\LoaderOverlay.java
 C:\Users\kamal\Desktop\mifare\src\main\java\model\SubEventData.java
 C:\Users\kamal\Desktop\mifare\src\main\java\helper\CheckInternet.java
+C:\Users\kamal\Desktop\mifare\src\main\java\cloudSync\CloudSyncDenied.java
 C:\Users\kamal\Desktop\mifare\src\main\java\dto\DeniedAttendanceRow.java
 C:\Users\kamal\Desktop\mifare\src\main\java\service\AttendanceService.java

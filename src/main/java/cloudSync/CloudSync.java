@@ -19,7 +19,9 @@ public class CloudSync {
 
         Thread syncThread = new Thread(() -> {
 
-            final String ENDPOINT = "https://smartserv.in/bsd-dashboard/api/attendance/admin/upload-batch";
+            // final String ENDPOINT =
+            // "https://smartserv.in/bsd-dashboard/api/attendance/admin/upload-batch";
+            final String ENDPOINT = "http://localhost:9090/api/attendance/admin/upload-batch";
 
             while (true) {
                 try {
@@ -36,7 +38,7 @@ public class CloudSync {
                     System.out.println(payload);
 
                     if (payload.isEmpty()) {
-                        Thread.sleep(2000);
+                        Thread.sleep(20000);
                         continue;
                     }
 
@@ -94,7 +96,7 @@ public class CloudSync {
                     ex.printStackTrace();
                 }
                 try {
-                    Thread.sleep(10_000);
+                    Thread.sleep(50_000);
                 } catch (InterruptedException ie) {
                     Thread.currentThread().interrupt();
                     break;
